@@ -1,40 +1,52 @@
-# Streamer deployment proposal
+# StreamerAI deployment architecture
 
-> **Status:** DRAFT — waiting for owner approval  
-> **Scope:** home self-hosted MVP, up to 5 profiles, thousands of titles, one concurrent stream  
+> **Status:** ACTIVE DIRECTION — revised by owner for on-demand discovery on 2026-09-27
+> **Scope:** home self-hosted MVP, up to 5 profiles, thousands of titles, one concurrent stream
 > **Last research check:** 2026-09-27
 
-This document proposes the deployment architecture. It is intentionally not an installation runbook yet: the repository contains no application code or deployment manifests. After approval, this proposal should become the basis for the repository scaffold, Compose files, CI, migrations, and operational runbooks.
+This document defines the target deployment architecture. The revised product
+flow is specified in `DISCOVERY.md`; implementation created before that
+revision must be reviewed against it before reuse.
 
-## 1. Proposed decisions
+## 1. Architecture decisions
 
 1. Run the product as a **local-first home node**. Browsers and future TV/mobile clients connect to one always-on desktop or home server.
-2. Ship the UI as a PWA, but run synchronization, provider access, scraping, background jobs, media handling, and AI orchestration in the home node — never in the browser.
-3. Keep the complete local state in **SQLite in WAL mode**. At this scale PostgreSQL, Redis, and Kubernetes would add operational cost without a useful benefit.
+2. Ship the UI as a PWA, but run discovery sessions, provider access, scraping, background jobs, media handling, and AI orchestration in the home node — never in the browser.
+3. Keep the complete local state in **SQLite in WAL mode**. The film database is a sparse, provenance-aware on-demand store, not a full upstream mirror. At this scale PostgreSQL, Redis, and Kubernetes would add operational cost without a useful benefit.
 4. Run local inference behind an internal, provider-neutral inference gateway. Use Ollama for the MVP; allow an OpenAI-compatible remote endpoint later without changing domain logic.
 5. Integrate Webshare as a provider adapter. Prefer a just-in-time direct video link, with a same-origin Range relay as a tested fallback. Do not assume transcoding is performed by Webshare.
-6. Use an incremental, provider-driven metadata cache, not a full mirror of external databases.
+6. Build the catalog incrementally from conversational discovery. Model and web-search results are candidate hints; only metadata-validated canonical records enter the local database and result ranking.
 7. Propose TMDB as the canonical metadata source for the non-commercial MVP, with required attribution. Keep ČSFD as an optional, isolated enrichment connector. Do not use IMDb.
-8. Do not automate Rotten Tomatoes scraping without written authorization: its current terms prohibit automated collection and scraping. Keep the connector disabled and replace the score with an authorized source or manual entry. As default score source, use TMDB or ČSFD or Google Search as fallback. 
+8. Do not automate Rotten Tomatoes scraping without written authorization: its current terms prohibit automated collection and scraping. Use TMDB or ČSFD ratings with explicit provenance. Web search may locate another authorized rating source, but a search-result snippet is never itself accepted as a rating; when no authorized rating exists, display `Not rated` instead of inventing one.
 9. Keep playback and all secrets local. Optionally synchronize only small user state through Cloudflare Workers + D1, with the local database remaining the source of truth.
-10. Do not expose the home node directly to the public internet. Use LAN access by default and a private overlay such as Tailscale for later remote access.
+10. Stream discovery progress to the UI as bounded task events. Never expose chain-of-thought, raw scraped pages, credentials, or unvalidated candidate names.
+11. Keep metadata, media, subtitle, search, agent and sync integrations behind
+    capability-based registries. TMDB and Webshare are initial adapters, never
+    hard-coded domain assumptions; follow `INTEGRATIONS.md`.
+12. Do not expose the home node directly to the public internet. Use LAN access by default and a private overlay such as Tailscale for later remote access.
 
 ## 2. Target topology
 
 ```mermaid
 flowchart LR
     C[Desktop / mobile / TV browser] -->|HTTPS on LAN or private overlay| G[Caddy gateway]
-    G --> A[Streamer app<br/>UI + API + job runner]
+    G --> A[StreamerAI app<br/>UI + API + job runner]
     A --> DB[(Local SQLite + FTS5)]
     A --> FS[Poster and response cache]
-    A --> W[Webshare adapter]
+    A --> D[Discovery orchestrator]
+    D --> AG[Agent gateway]
+    D --> M[Metadata validator]
+    D --> W[Webshare availability adapter]
+    D --> SUB[Subtitle provider registry]
+    D --> S[Approved SearchProvider]
     W --> WS[Webshare API / media]
-    A --> M[Metadata adapters]
+    SUB --> EMB[Embedded subtitle tracks]
+    SUB -. optional .-> EXT[Future external subtitle adapter]
     M --> TMDB[Authorized canonical source]
     M --> CSFD[Optional ČSFD enrichment]
-    A --> AG[Agent gateway]
     AG --> O[Local Ollama]
     AG -. explicit opt-in .-> R[Future remote inference]
+    S -. optional authorized queries .-> WEB[Web search API]
     A -. optional user-state sync over TLS .-> CW[Cloudflare Worker]
     CW --> D1[(Cloudflare D1, EU)]
     C -. direct-link fast path after capability test .-> WS
@@ -42,9 +54,10 @@ flowchart LR
 
 ### Trust boundaries
 
-- The browser uses the Streamer origin for every application API. Only after the direct-play capability test may a playback ticket redirect the media element to a fresh, short-lived Webshare link; the browser never receives the Webshare password, WST session token, model-management access, or Cloudflare administrative credentials.
+- The browser uses the StreamerAI origin for every application API. Only after the direct-play capability test may a playback ticket redirect the media element to a fresh, short-lived Webshare link; the browser never receives the Webshare password, WST session token, model-management access, or Cloudflare administrative credentials.
 - The app is the only component allowed to call provider APIs and the agent gateway. A verified direct media fetch is the sole browser-to-provider exception.
-- The model receives bounded task input, not credentials, stream URLs, raw cookies, or unrestricted database access.
+- The model receives bounded task input and sanitized validated facts, not credentials, stream URLs, raw cookies, or unrestricted database access.
+- Model memory and web-search snippets may propose candidates but are never a source of record. Unresolved candidates cannot reach the result UI or later ranking.
 - Cloud sync receives no provider credentials, model prompts, media URLs, full catalog mirror, posters, or media files.
 - Scraped text is untrusted input. It cannot directly invoke a tool or modify records without schema validation and policy checks.
 
@@ -57,6 +70,8 @@ flowchart LR
 | Local API | Fastify + Zod/JSON Schema | Low overhead, streaming support, explicit contracts |
 | Local persistence | SQLite, WAL, migrations, FTS5 | Reliable single-node storage and search for thousands of titles |
 | Background work | Durable SQLite job table with leases, retry, and idempotency | Avoids Redis; survives process restarts |
+| Discovery updates | Server-Sent Events from durable task state | Progressive UI without requiring a second realtime service |
+| Integration registry | Capability-based typed adapters | Additional databases, media services and subtitle sources do not change domain logic |
 | Local inference | Ollama through the app-owned agent gateway | Easiest GPU-aware MVP runtime on Windows/Linux |
 | Reverse proxy | Caddy | Single HTTPS origin, security headers, optional internal CA |
 | Media fallback | Streaming HTTP Range relay; FFmpeg only as an optional later profile | Direct play stays cheap while incompatible media has an upgrade path |
@@ -71,7 +86,7 @@ The application data volume contains:
 
 ```text
 data/
-  streamer.db                 # authoritative local state
+  streamer-ai.db              # authoritative local state
   cache/http/                 # bounded provider response cache
   cache/posters/              # bounded image cache
   backups/                    # encrypted, rotated SQLite backups
@@ -80,8 +95,12 @@ data/
 Rules:
 
 - SQLite is persistent storage, not merely a cache. The application must work when Cloudflare, ČSFD, search, or the model is offline.
+- SQLite contains only titles encountered through discovery, explicit browsing, playback, or user lists. It must never imply that the local database is a complete film catalog.
 - Use FTS5 and normalized aliases for catalog search. A separate search engine is unnecessary at this scale.
 - Store source provenance, retrieval time, connector version, and expiry with every external metadata value.
+- Persist structured discovery intent, validated canonical IDs, result groups and concise conversation summaries. Raw prompts remain local and are retained only according to an explicit history setting.
+- Persist provider-independent Library membership, playback progress and
+  append-only Watch History events per profile.
 - Cache Webshare search results for 6–24 hours and negative results for a shorter period. Recheck file availability before playback.
 - Never persist Webshare direct links. Create one for each playback session and discard it when the session ends.
 - Back up SQLite using its online-backup mechanism, not by copying a live database and WAL files independently.
@@ -125,6 +144,47 @@ The app should define a `SearchProvider` interface. For the MVP:
 
 This preserves the requested future ability to use Google or another search provider without coupling the agent to a discontinued API.
 
+### 5.3 On-demand discovery orchestration
+
+Each user message creates or advances a durable discovery session. The
+orchestrator executes a bounded, idempotent pipeline:
+
+1. parse and merge a strict structured intent;
+2. generate a limited candidate set from model knowledge, fresh local records,
+   canonical discovery feeds and optionally an authorized web-search adapter;
+3. resolve every candidate through TMDB and optional ČSFD enrichment;
+4. discard unresolved or ambiguous candidates;
+5. load expected season/episode structure for series;
+6. search Webshare and normalize file/format/episode matches;
+7. assign `available`, `partial`, `unavailable`, or `unknown`;
+8. let the model rank only the validated eligible set;
+9. validate returned canonical IDs and publish Best, Available and Unavailable
+   result groups.
+
+The API exposes progressive Server-Sent Events backed by durable job state.
+Client disconnects do not cancel the job, repeated messages use idempotency
+keys, and reconnecting clients can resume from the last event cursor.
+
+The database separates candidate hints from canonical records. Candidate hints
+have a short lifetime and never appear in library search; canonical records keep
+provider provenance and independent metadata, rating and availability freshness.
+The full contract is in `DISCOVERY.md`.
+
+### 5.4 Home feed orchestration
+
+The default Home screen is populated even without an active conversation:
+
+- Continue Watching reads local Library progress;
+- New Releases uses canonical release feeds;
+- Trending uses canonical trends plus optional authorized search signals;
+- Top Rated uses source-specific ratings with a minimum-vote threshold;
+- Picks for You uses a minimized profile summary and validated candidates.
+
+Feed jobs use stale-while-revalidate behavior. They validate canonical metadata,
+prioritize availability checks for visible tiles and keep the previous good
+section during provider failure. Header links address section anchors on Home;
+they do not create separate full-catalog services.
+
 ## 6. Webshare integration and playback
 
 The official API documents XML-over-HTTP endpoints for `salt`, `login`, `search`, `file_info`, and `file_link`. `file_link` supports `download_type=video_stream`, device metadata, and `force_https=1`, and returns a direct link. The documentation does **not** guarantee the link TTL, CORS, IP/device binding, byte-range support, or transcoding.
@@ -142,12 +202,13 @@ Webshare often reports application errors inside an HTTP 200 XML response. The a
 
 ### 6.2 Matching flow
 
-1. Generate Webshare searches from canonical/original/localized title, year, and `SxxEyy` where applicable; set `category=video`.
+1. Accept only metadata-validated canonical records from the discovery orchestrator. Generate Webshare searches from canonical/original/localized title, year, and `SxxEyy` where applicable; set `category=video`.
 2. Normalize filenames and parse release tags deterministically: title, year, season/episode, resolution, codec hints, audio language, subtitle hints, source, and size.
 3. Eliminate unavailable, password-protected, provider-flagged copyrighted/non-public, or incompatible candidates.
 4. Rank by exact IDs/titles/year/episode and device/language preferences.
-5. Ask the local model only to rerank genuinely ambiguous finalists. It must not receive WST or download links.
+5. Ask the local model only to rerank genuinely ambiguous identity finalists. Device/codec/language compatibility and the final playable variant remain deterministic. The model must not receive WST or download links.
 6. Save the selected `file_ident`, confidence, rationale codes, and alternatives; retain a manual correction path.
+7. For a series, match and store availability per expected episode. A season pack or filename is not proof that all episodes exist.
 
 ### 6.3 Direct-first playback
 
@@ -200,14 +261,17 @@ Include:
 - watch progress and completion events;
 - recommendation feedback;
 - explicit title-match corrections;
-- UI language and safe device-independent settings.
+- UI language and safe device-independent settings;
+- optionally saved structured discovery intents and canonical result IDs after
+  explicit user opt-in; raw conversation text stays local by default.
 
 Exclude:
 
 - Webshare password, WST, cookies, and direct links;
 - local account password hashes and encryption master keys;
 - media, posters, complete catalog, scraped pages, and provider caches;
-- prompts, raw model context, hardware inventory, and diagnostic logs unless explicitly exported by the user.
+- prompts, raw model context, hardware inventory, and diagnostic logs unless explicitly exported by the user;
+- unvalidated candidate hints and raw conversational discovery history.
 
 ### 7.2 Offline-first protocol
 
@@ -233,6 +297,11 @@ MVP identity is one household installation with one administrator and up to five
 - Never put secrets in images, source control, Compose files, logs, URLs, crash reports, or AI prompts.
 - Support secret rotation and explicit provider disconnect, which deletes local provider credentials and invalidates sessions where the provider supports it.
 
+Library membership and Watch History are separate profile-scoped aggregates.
+Playback automatically upserts Library state, while an explicit Add to Library
+action creates a saved entry without playback. Removing a Library entry does not
+delete history unless the user separately confirms that privacy action.
+
 ## 9. Network exposure
 
 ### Initial desktop profile
@@ -242,7 +311,7 @@ MVP identity is one household installation with one administrator and up to five
 - When a containerized backend calls host-native Ollama, use the platform's explicit host bridge (`host.docker.internal` on Docker Desktop or a narrowly scoped `host-gateway` mapping on Linux) and firewall the Ollama listener to the host/container bridge. If that restriction cannot be enforced, run Ollama inside the private Compose network instead.
 - Expose only the HTTPS UI/gateway port to the LAN.
 - Bind Ollama and internal management endpoints to loopback, the host/container bridge, or a private container network as appropriate for the chosen profile. Never publish port `11434` to the LAN or internet.
-- Restrict CORS to the Streamer origin and use CSRF protection, secure cookies, CSP, and strict outbound URL allowlists.
+- Restrict CORS to the StreamerAI origin and use CSRF protection, secure cookies, CSP, and strict outbound URL allowlists.
 
 ### Remote household access
 
@@ -258,9 +327,11 @@ Illustrative non-secret configuration:
 
 ```text
 APP_MODE=home
-APP_ORIGIN=https://streamer.home.arpa
+APP_ORIGIN=https://streamer-ai.home.arpa
 DATA_DIR=/data
 PLAYBACK_MODE=direct-first
+MEDIA_PROVIDER=webshare
+SUBTITLE_PROVIDER=embedded
 INFERENCE_PROVIDER=ollama
 INFERENCE_BASE_URL=http://ollama:11434
 INFERENCE_MODEL=qwen3.5:4b
@@ -279,7 +350,8 @@ Expose local-only health information:
 
 - `/health/live`: process is running;
 - `/health/ready`: migrations complete, data directory writable, SQLite available;
-- `/health/dependencies`: Webshare session, metadata providers, agent, disk budget, backup age, and optional cloud sync status.
+- `/health/dependencies`: registered metadata, media and subtitle providers,
+  agent, disk budget, backup age, and optional cloud sync status.
 
 Use structured logs with correlation IDs and redaction. Do not log queries that can reveal viewing history by default. Retain bounded local logs and expose a user-reviewed diagnostic export.
 
@@ -290,6 +362,8 @@ Expected degraded behavior:
 | Local model unavailable/OOM | Deterministic matching, search, and playback continue; AI jobs pause |
 | ČSFD blocked or parser broken | Canonical metadata remains; enrichment is marked stale |
 | General search unavailable | Existing catalog and canonical trend feeds remain |
+| Candidate cannot be validated | Hide it from results and retain only a bounded diagnostic counter |
+| Streaming provider check fails | Mark availability unknown; never convert the outage to unavailable |
 | Cloudflare unavailable/over limit | Local writes continue and outbox waits |
 | Direct Webshare link fails | Refresh once, then try Range relay, then report a clear provider error |
 | Unsupported codec | Offer another candidate; optional remux/transcode only if enabled |
@@ -312,14 +386,22 @@ Expected degraded behavior:
 - Qwen 4B versus 9B evaluation on the actual 8 GB GPU.
 - Validate TMDB attribution and ČSFD connector terms/rate policy.
 - Define the title/episode/media-variant domain model and test fixture set.
+- Prototype the conversational intent → candidate → metadata validation →
+  availability → grouped result pipeline with mocked providers.
 
 ### Phase 1 — local core
 
-- PWA, local accounts/profiles, SQLite schema/FTS, Webshare adapter, deterministic matching, direct-first playback, progress, backup, and visible synchronization freshness.
+- PWA, local accounts/profiles, centered conversational composer, discovery
+  sessions/events, populated Home feeds/anchors, Library and Watch History,
+  on-demand SQLite catalog, TMDB validation, Webshare adapter, embedded subtitle
+  detection, grouped Best/Available/Unavailable tiles, deterministic matching,
+  direct-first playback, progress and backup.
 
 ### Phase 2 — local agent
 
-- Agent gateway, hardware preflight, Qwen 4B, structured matching/labels/recommendation reranking, audit trail, and evaluation dashboard.
+- Agent gateway, hardware preflight, Qwen 4B, structured intent parsing,
+  candidate generation, validated-set reranking, follow-up conversation,
+  bounded explanations, audit trail, and evaluation dashboard.
 
 ### Phase 3 — optional cloud state sync
 
@@ -331,9 +413,30 @@ Expected degraded behavior:
 
 ## 14. Acceptance gates
 
-The deployment proposal is implemented only when:
+The deployment architecture is implemented only when:
 
 - a fresh install reaches a usable local library without Cloudflare or the model;
+- an open-ended request produces no visible title until a metadata provider has
+  assigned a canonical ID;
+- the result always separates one non-duplicated Best match, other verified
+  playable titles, and validated unavailable titles; provider outages are shown
+  as unknown rather than unavailable;
+- a conversational refinement updates structured constraints and never bypasses
+  metadata or availability validation;
+- a series tile reports exact verified season/episode coverage and never labels
+  a partial pack complete;
+- every displayed rating names its source, and any StreamerAI Match value is
+  visually distinct from source ratings;
+- Home contains Continue Watching, New Releases, Trending, Top Rated and Picks
+  for You without requiring the user to submit a search first;
+- Home navigation moves to accessible section anchors while Library remains a
+  separate route;
+- Play is available only for a verified compatible stream, while every
+  metadata-validated tile can be added to the provider-independent Library;
+- playback automatically creates/updates Library state, and Watch History
+  remains separately viewable and deletable;
+- a second fake metadata, media and subtitle adapter can pass the shared
+  integration contract tests without changing core discovery or UI components;
 - the browser can play, seek, resume, and stop one authorized Webshare stream without leaking WST;
 - all external connector calls have timeout, retry/backoff, rate limit, cache, provenance, and circuit breaker behavior;
 - AI outputs are schema-validated and cannot execute arbitrary network, shell, or database operations;
@@ -343,18 +446,29 @@ The deployment proposal is implemented only when:
 - no secrets or viewing history appear in default logs;
 - deletion/export covers profile, watch history, learned preferences, AI-derived labels, and cloud sync state.
 
-## 15. Approval record
+## 15. Decision record
 
-Approval is requested for these material choices:
+Owner-directed and previously approved decisions:
 
-- [ ] Home-node, local-first topology with no public port exposure.
-- [ ] TypeScript + React/Vite + Fastify + local SQLite stack.
-- [ ] TMDB as proposed canonical non-commercial metadata source; optional isolated ČSFD enrichment; no IMDb.
-- [ ] Rotten Tomatoes automation disabled unless written authorization is obtained.
-- [ ] Provider-neutral web-search interface, with optional Brave Search as the first supported adapter and no new dependency on the retiring Google Custom Search API.
-- [ ] Webshare direct-first playback with tested Range relay fallback; transcoding postponed until the codec spike proves it necessary.
-- [ ] Optional Cloudflare Worker + D1 EU sync for small user state only; all provider secrets remain local.
-- [ ] Provider-neutral AI gateway with local Qwen 4B default and explicit remote opt-in, as detailed in `LOCAL_AGENT.md`.
+- [x] StreamerAI as the product name and conversational, on-demand discovery as
+  the primary interaction.
+- [x] Sparse local film database populated only through validated on-demand
+  discovery rather than a full metadata mirror.
+- [x] Best / Available / Unavailable grouped result contract with compound
+  season/episode coverage for series.
+- [x] Populated default Home sections with anchor navigation, plus a separate
+  personal Library and Watch History.
+- [x] Play / Add to Library actions with provider-independent membership.
+- [x] Capability-based metadata, media and subtitle adapters as specified in
+  `INTEGRATIONS.md`.
+- [x] Home-node, local-first topology with no public port exposure.
+- [x] TypeScript + React/Vite + Fastify + local SQLite stack.
+- [x] TMDB as proposed canonical non-commercial metadata source; optional isolated ČSFD enrichment; no IMDb.
+- [x] Rotten Tomatoes automation disabled unless written authorization is obtained.
+- [x] Provider-neutral web-search interface, with optional Brave Search as the first supported adapter and no new dependency on the retiring Google Custom Search API.
+- [x] Webshare direct-first playback with tested Range relay fallback; transcoding postponed until the codec spike proves it necessary.
+- [x] Optional Cloudflare Worker + D1 EU sync for small user state only; all provider secrets remain local.
+- [x] Provider-neutral AI gateway with local Qwen 4B default and explicit remote opt-in, as detailed in `LOCAL_AGENT.md`.
 
 ## References
 

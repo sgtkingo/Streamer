@@ -1,4 +1,25 @@
-# Design System Inspiration of Runway
+# StreamerAI design system — inspired by Runway
+
+## 0. Product-specific direction
+
+StreamerAI applies the cinematic restraint described below to a conversational
+discovery product. The interface is not a Netflix clone and not a generic chat
+window: natural-language intent begins the experience, while validated film and
+series artwork remains the dominant visual output.
+
+The visual hierarchy is fixed:
+
+1. centered conversational search/composer;
+2. populated Home rails when no conversation result is active;
+3. one large colorful Best match tile for active discovery;
+4. smaller colorful Available to stream tiles;
+5. grayscale Found, not currently available tiles;
+6. restrained conversation history and provider diagnostics.
+
+Color comes from validated poster/backdrop artwork. Grayscale is a semantic
+availability state, not decoration, and must always be paired with text. The
+application chrome remains black, white and cool gray with no decorative
+gradients or shadows.
 
 ## 1. Visual Theme & Atmosphere
 
@@ -106,10 +127,53 @@ What makes Runway distinctive is its complete commitment to visual content as de
 
 ### Distinctive Components
 
+**Conversational Composer**
+- Wide, horizontally centered dark input near the top of Home
+- Subtle Border Dark outline, no shadow, comfortable 8px radius
+- 16–20px input text and muted gray example placeholder
+- Expands for follow-up messages without turning the page into a chat transcript
+- Shows a compact send control and accessible progress state
+
+**Best Match Tile**
+- Large cinematic backdrop or poster-led editorial composition
+- Full color only when streaming availability is verified
+- Minimal overlay: Best match label, title, year, source rating, reason, Play
+- Alternate files and formats hidden behind a three-dot action
+
+**Availability Tile**
+- Smaller poster-first card with source rating and year always visible
+- Available cards remain colorful; unavailable cards use grayscale artwork,
+  reduced visual emphasis and explicit unavailable text
+- StreamerAI Match and source Rating are visually and semantically distinct
+- Play is the primary action only when verified; Add to Library is a consistent
+  secondary action and becomes In Library after saving
+
+**Home Content Rail**
+- Section label and quiet freshness state above a cinematic horizontal row
+- Continue Watching may include one thin progress indicator without turning the
+  card into a dashboard widget
+- Anchor navigation scrolls to rails; it does not introduce page-transition
+  chrome for each category
+
+**Library and History**
+- Library uses a dense editorial poster grid with status filters
+- Watch History is a quiet right-side rail on desktop, separated by one subtle
+  border rather than elevation
+- Mobile history becomes a full-width sheet with the same typography and no
+  desktop-style squeezed sidebar
+
+**Series Stack**
+- Two or three subtly offset layers indicate seasons without heavy decoration
+- Coverage text is explicit: seasons and verified episodes
+- Expanded state reveals season/episode rows with color/grayscale availability
+- No shadow; layering uses position, border and photographic contrast
+
 **Cinematic Hero**
 - Full-viewport image or video with text overlay
 - Headline in 48px abcNormal, white on dark imagery
 - The image is always cinematic quality — film-grade composition
+- In the application this pattern is reserved for the validated Best match, not
+  for an unverified model suggestion
 
 **Research Article Cards**
 - Photographic thumbnails with article titles
@@ -209,6 +273,9 @@ What makes Runway distinctive is its complete commitment to visual content as de
 - **Image grids**: Multi-column → 2-column → single column
 - **Research articles**: Feature-size cards → stacked full-width
 - **Trust logos**: Horizontal scroll or reduced grid
+- **Discovery results**: Best match stays first; Available and Unavailable
+  sections become single-column lists without mixing their states
+- **Series stacks**: Open into a full-width detail sheet on mobile
 
 ### Image Behavior
 - Cinematic images scale proportionally

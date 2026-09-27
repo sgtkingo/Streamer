@@ -1,7 +1,7 @@
-# Local agent proposal
+# StreamerAI local agent architecture
 
-> **Status:** DRAFT — waiting for owner approval  
-> **Target hardware:** desktop with 8 GB GPU VRAM  
+> **Status:** ACTIVE DIRECTION — revised by owner for on-demand discovery on 2026-09-27
+> **Target hardware:** desktop with 8 GB GPU VRAM
 > **Last research check:** 2026-09-27
 
 ## 1. Decision
@@ -37,7 +37,10 @@ Concurrency:  1
 
 The 9B artifact nearly fills an 8 GB GPU before runtime/context/display overhead. It may partially offload to system RAM, become slow, fail during playback, or OOM. It is therefore not the default and should be unloaded while video transcoding or other GPU-heavy work runs.
 
-If the 4B model fails preflight or quality gates, the app remains usable without AI. It must not silently download a different model or send data to a remote provider.
+If the 4B model fails preflight or quality gates, deterministic browsing,
+previously validated records and playback remain usable, while open-ended
+conversational discovery is clearly unavailable. The app must not silently
+download a different model or send data to a remote provider.
 
 ## 2. Why this model
 
@@ -110,57 +113,144 @@ INFERENCE_REMOTE_ALLOWED=false
 
 The loopback URL applies when both the backend and Ollama run natively. A containerized backend uses either the private `ollama:11434` Compose service or the explicitly firewalled host-bridge address described in `DEPLOY.md`; it must never rely on a LAN-exposed Ollama port. Remote API keys are represented by `apiKeyRef` into the local secret store, never by a value in normal configuration or the database.
 
-## 5. What the agent does
+## 5. On-demand discovery responsibilities
 
-The model is used only where language ambiguity adds value.
+The model is the conversational and semantic component of a larger deterministic
+pipeline. Its memory is useful for proposing possibilities, but it is never a
+source of record. `DISCOVERY.md` is the normative end-to-end contract.
 
-### 5.1 Ambiguous title and episode matching
+### 5.1 Intent parsing and follow-up conversation
 
-Deterministic code first normalizes and extracts:
+The model receives the current user message, the existing structured intent and
+a minimized profile summary. It returns a strict, versioned intent patch for
+media type, mood, atmosphere, season, people, genre, era, country, runtime,
+language, series coverage, availability and negative constraints.
 
-- canonical/localized title aliases;
-- year;
-- film versus series;
-- season and episode (`SxxEyy` and common variants);
-- resolution and source tags;
-- container/codec hints;
-- audio and subtitle language hints;
-- provider IDs and file size.
+Application code validates and merges the patch. Explicit current instructions
+override inferred history. When ambiguity materially changes the result, the
+agent may ask one concise clarifying question; otherwise it should return a
+useful initial result and state safe assumptions.
 
-The model receives at most the top few candidates and returns a strict object such as:
+Conversation history is summarized into structured constraints and a short local
+summary. The model does not need an unbounded raw transcript on every turn.
+
+### 5.2 Candidate generation
+
+For a request such as `an autumn movie with Sandra Bullock`, the model may use
+its own general knowledge to propose bounded candidate hints:
 
 ```json
 {
-  "matchId": "candidate-id-or-null",
-  "decision": "match | abstain",
-  "confidence": 0.0,
-  "reasonCodes": ["TITLE_ALIAS", "YEAR_MATCH", "EPISODE_MATCH"],
-  "warnings": []
+  "title": "candidate title",
+  "alternateTitle": null,
+  "yearHint": 1998,
+  "typeHint": "movie",
+  "personHints": ["Sandra Bullock"],
+  "reasonCodes": ["CAST_REQUEST", "AUTUMN_ATMOSPHERE"]
 }
 ```
 
-The app validates the schema and calculates the final decision from deterministic evidence, model agreement, and calibrated thresholds. Self-reported model confidence is never trusted by itself. A user correction always wins and becomes an evaluation fixture.
+The application may combine these hints with fresh local records, TMDB
+popularity/trending/release feeds and sanitized snippets from an approved
+`SearchProvider`. Candidates are hypotheses only. Model-provided plots,
+people, ratings, seasons, or availability are discarded before validation.
 
-### 5.2 Labels and dynamic collections
+The application, not the model, performs web requests. It enforces provider,
+query, result, tool-call and time budgets and records provenance. Google result
+page scraping remains out of scope; an authorized replaceable search adapter is
+required.
 
-Given already validated metadata, the model may propose bounded labels or collection membership from an approved taxonomy. Unknown labels require review or mapping; the model cannot create executable filters or write directly to the database.
+### 5.3 Validation gate and eligible-set ranking
 
-### 5.3 Recommendation reranking and explanation
+Every proposed candidate must resolve through TMDB and optional ČSFD enrichment
+to an unambiguous canonical ID. Deterministic code then retrieves metadata,
+ratings and series structure and searches Webshare for available variants.
 
-Deterministic logic produces candidates from preferences, history, language, season, availability, and diversity rules. The model may rerank a small set and generate a short explanation. It does not receive raw credentials or an unlimited viewing-history dump.
+Only the resulting validated fact objects are returned to the model:
 
-### 5.4 Trend/news synthesis
+```json
+{
+  "canonicalId": "tmdb:movie:123",
+  "title": "Validated title",
+  "year": 1998,
+  "people": ["Validated person"],
+  "genres": ["Validated genre"],
+  "ratings": [{ "source": "TMDB", "percent": 74 }],
+  "availability": "available",
+  "formatSummary": ["1080p", "Czech subtitles"]
+}
+```
 
-The application, not the model, calls an approved `SearchProvider` or canonical release/trend feed. It strips active content, records URLs/timestamps, and passes bounded text snippets as untrusted data. The model may summarize or label them.
+The agent may rank this bounded eligible set and generate concise user-facing
+reasons. Its output contains only canonical IDs present in the input.
+Application code rejects unknown, duplicate or cross-group IDs.
 
-Model/or app can use the https://developer.themoviedb.org/docs/popularity-and-trending as tool for finding populars/trends.
+The result contract is:
 
-Google Custom Search is not hard-coded: its JSON API is closed to new customers and scheduled to end for existing users on 2027-01-01. A Google adapter is allowed only for an operator with valid programmatic access; scraping Google result pages is out of scope. The proposed first general-search adapter is Brave Search API, enabled only after the operator supplies a key and protected by query budgets and caching.
+- one Best match, selected from streamable candidates whenever any satisfy the
+  request;
+- other validated Available to stream candidates;
+- validated but Unavailable candidates;
+- warnings for unknown provider state or partial series coverage.
+
+Unavailable and unknown are different. A Webshare timeout cannot become a claim
+that a title is unavailable.
+
+### 5.4 Ambiguous provider-file matching
+
+Deterministic code first normalizes titles, year, film/series type, season and
+episode, resolution, source, container/codec hints, audio/subtitle language and
+file size. The model receives only a few ambiguous finalists and may return a
+strict match-or-abstain decision.
+
+Device compatibility, bitrate, preferred language, Range behavior and final
+playable variant selection remain deterministic. Self-reported model confidence
+is never trusted by itself. A user correction wins and becomes an evaluation
+fixture.
+
+### 5.5 Series assembly
+
+Canonical metadata defines expected seasons and episodes. The agent may assist
+only with ambiguous filename-to-episode mapping after deterministic parsing.
+Completeness is calculated in application code:
+
+- a fully matched expected episode is available;
+- a season/series is complete only when all expected non-special episodes are
+  available;
+- multi-episode files require a deterministic covered range;
+- season packs without inspectable coverage remain unverified;
+- missing episodes are preserved for the grayscale/partial UI.
+
+### 5.6 Labels, collections and explanations
+
+Given validated metadata, the model may propose bounded labels, dynamic
+collection membership and short recommendation explanations from an approved
+taxonomy. It cannot create executable filters or write directly to the database.
+
+For default Home content, Continue Watching is deterministic. New Releases,
+Trending and Top Rated come from canonical/provider feeds. The model may rerank
+only the validated Picks for You candidate set and produce short explanations;
+it cannot manufacture Home-section entries.
+
+### 5.7 Subtitle assistance
+
+Embedded and external subtitle candidates are discovered through a
+`SubtitleProvider`. Deterministic code matches media identity, language,
+season/episode, release hints and optional approved hashes. The agent may rerank
+a small ambiguous set or explain choices, but it cannot generate, translate or
+retime subtitles in the MVP. `INTEGRATIONS.md` defines the provider contract.
 
 ## 6. What the agent does not do
 
 The model must not:
 
+- present an unvalidated candidate title to the user as a result;
+- supply factual metadata, people, ratings, season structure or availability
+  from its own memory;
+- rank a candidate that is not part of the validated eligible set;
+- claim that a series is complete or that a provider has no file without
+  deterministic coverage/availability evidence;
+- invent subtitle text, language, release compatibility, checksum or timing;
 - choose bitrate, resolution, codec compatibility, Range behavior, or transcoding settings;
 - receive or store Webshare passwords, WST, direct media links, Cloudflare tokens, or encryption keys;
 - run a shell, arbitrary SQL, arbitrary filesystem operations, or arbitrary network requests;
@@ -180,6 +270,9 @@ catalog.getCandidates(normalizedTitle, year, type, season, episode)
 catalog.getMetadata(titleId, allowedFields)
 profile.getPreferenceSummary(profileId)
 discovery.searchApprovedProvider(query, purpose, maxResults)
+discovery.resolveCanonicalCandidates(candidateHints)
+discovery.getValidatedEligibleSet(sessionId)
+subtitles.getCandidates(mediaVariantId, language, limit)
 labels.listAllowedTaxonomy()
 ```
 
@@ -189,6 +282,8 @@ Rules:
 - the tool loop has a low hard limit, proposed as three calls;
 - network tools use a provider adapter and host allowlist, not a user/model-supplied URL;
 - tool results are size-limited, provenance-tagged, and treated as untrusted;
+- candidate generation and validated ranking are separate phases; the ranking
+  phase accepts only canonical IDs emitted by application code;
 - read and proposal tools are separated from commit operations;
 - the final output is produced in a second call without tools, under a strict JSON schema;
 - allow at most one repair retry for invalid structured output, then abstain;
@@ -247,6 +342,7 @@ Every agent task carries a privacy classification:
 ```text
 PUBLIC_METADATA       # title and public metadata only
 PROFILE_DERIVED       # minimized preference summary
+USER_DISCOVERY_QUERY  # current user message/intent, only with remote opt-in
 PRIVATE_LOCAL_ONLY    # raw history, corrections, or other sensitive context
 ```
 
@@ -256,6 +352,9 @@ Remote rules:
 - provider setup requires an explicit endpoint, TLS validation, encrypted API key, model, budget, and data policy;
 - `PRIVATE_LOCAL_ONLY` never leaves the home node;
 - `PROFILE_DERIVED` requires a separate opt-in and minimization/redaction;
+- `USER_DISCOVERY_QUERY` may be sent only when the user has explicitly enabled
+  remote conversational inference; prior raw conversation history remains local
+  unless separately disclosed in the setup policy;
 - the UI clearly marks each remotely processed feature;
 - there is no automatic local-to-remote failover;
 - retries, rate limits, cost limits, circuit breaker, and provider deletion/retention information are mandatory;
@@ -265,7 +364,8 @@ The provider abstraction must tolerate capability differences. At startup, negot
 
 ## 10. Scheduling and caching
 
-- Interactive matching requested by the user has priority over background labeling and discovery.
+- Interactive discovery and follow-up messages have priority over background
+  labeling, refresh and enrichment.
 - Use one inference request at a time on the 8 GB profile.
 - Suspend or throttle background AI during playback when GPU pressure or latency crosses the configured threshold.
 - Cache deterministic and model results by normalized input hash, source versions, model digest, prompt version, and schema version.
@@ -276,6 +376,11 @@ The provider abstraction must tolerate capability differences. At startup, negot
 
 Before enabling automatic matching, build a versioned evaluation set from authorized, redacted examples:
 
+- open-ended mood/context/person requests and multi-turn refinements;
+- plausible but nonexistent titles that must never reach the UI;
+- candidates with ambiguous remakes, localized names and person-name collisions;
+- provider outages that must remain `unknown`, not `unavailable`;
+- complete and deliberately incomplete season/episode inventories;
 - at least 500 representative filenames;
 - films, series, seasons, multi-episode files, alternative/localized titles, release groups, and intentionally ambiguous negatives;
 - balanced Czech, English, and German examples;
@@ -285,6 +390,11 @@ Before enabling automatic matching, build a versioned evaluation set from author
 
 Track:
 
+- visible unvalidated-title rate, required to remain exactly zero;
+- canonical resolution precision and abstention quality;
+- constraint retention/replacement across follow-up turns;
+- Best/Available/Unavailable grouping validity;
+- false complete-series claims, required to remain exactly zero;
 - exact title/episode match accuracy;
 - false automatic match rate (the critical metric);
 - abstention precision/recall;
@@ -308,8 +418,8 @@ Do not update the model tag, quantization, prompt, or tool schema without runnin
 ### Current desktop
 
 - Prefer host-native Ollama for the simplest GPU support.
-- If the Streamer backend also runs natively, bind Ollama to loopback. If the backend runs in Compose, restrict Ollama to the host/container bridge with the OS firewall as specified in `DEPLOY.md`, or run Ollama in the private Compose network. Never expose `11434` to the LAN.
-- The Streamer backend reaches it through the local agent gateway.
+- If the StreamerAI backend also runs natively, bind Ollama to loopback. If the backend runs in Compose, restrict Ollama to the host/container bridge with the OS firewall as specified in `DEPLOY.md`, or run Ollama in the private Compose network. Never expose `11434` to the LAN.
+- The StreamerAI backend reaches it through the local agent gateway.
 - Pin the model tag and recorded digest; do not use an uncontrolled `latest` alias.
 - Store model files in Ollama's managed local storage, outside application backups.
 
@@ -325,18 +435,29 @@ Do not update the model tag, quantization, prompt, or tool schema without runnin
 - Put it behind the same gateway contract; do not let clients or provider adapters call it directly.
 - Keep user opt-in, privacy classification, cost limit, and explicit provider health visible.
 
-## 13. Approval record
+## 13. Decision record
 
-Approval is requested for:
+Owner-directed and previously approved decisions:
 
-- [ ] Qwen3.5 4B Q4_K_M as the default local model for the 8 GB GPU.
-- [ ] Qwen3.5 9B Q4_K_M only as an optional, preflight-gated Quality profile.
-- [ ] Ollama for MVP and llama.cpp only for later installer bundling.
-- [ ] 4K context, thinking disabled, concurrency 1, and strict schemas for routine tasks.
-- [ ] Deterministic candidate generation and stream selection; LLM only for ambiguous matching, bounded labels, and recommendation reranking.
-- [ ] No direct browser-to-model access and no secrets/arbitrary shell/network/database tools.
-- [ ] Explicit, privacy-classified opt-in for any future remote inference; no silent failover.
-- [ ] General search through a replaceable authorized provider (proposed first adapter: Brave Search), not scraped Google result pages.
+- [x] Conversational intent parsing and candidate generation from model
+  knowledge, with mandatory deterministic metadata validation before display.
+- [x] Agent reranking restricted to a bounded eligible set of canonical IDs.
+- [x] Series completeness and streaming availability calculated by application
+  code rather than model claims.
+- [x] Home feed generation remains provider/deterministic; the model only
+  reranks validated personalized picks.
+- [x] Subtitle discovery is adapter-based and deterministic, with model help
+  limited to ambiguous candidate reranking.
+- [x] Qwen3.5 4B Q4_K_M as the default local model for the 8 GB GPU.
+- [x] Qwen3.5 9B Q4_K_M only as an optional, preflight-gated Quality profile.
+- [x] Ollama for MVP and llama.cpp only for later installer bundling.
+- [x] 4K context, thinking disabled, concurrency 1, and strict schemas for routine tasks.
+- [x] Deterministic metadata, availability and stream selection; LLM for intent,
+  candidate hypotheses, ambiguous matching, bounded labels and validated-set
+  recommendation reranking.
+- [x] No direct browser-to-model access and no secrets/arbitrary shell/network/database tools.
+- [x] Explicit, privacy-classified opt-in for any future remote inference; no silent failover.
+- [x] General search through a replaceable authorized provider (proposed first adapter: Brave Search), not scraped Google result pages.
 
 ## References
 
