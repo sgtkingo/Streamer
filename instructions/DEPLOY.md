@@ -1,0 +1,372 @@
+# Streamer deployment proposal
+
+> **Status:** DRAFT — waiting for owner approval  
+> **Scope:** home self-hosted MVP, up to 5 profiles, thousands of titles, one concurrent stream  
+> **Last research check:** 2026-09-27
+
+This document proposes the deployment architecture. It is intentionally not an installation runbook yet: the repository contains no application code or deployment manifests. After approval, this proposal should become the basis for the repository scaffold, Compose files, CI, migrations, and operational runbooks.
+
+## 1. Proposed decisions
+
+1. Run the product as a **local-first home node**. Browsers and future TV/mobile clients connect to one always-on desktop or home server.
+2. Ship the UI as a PWA, but run synchronization, provider access, scraping, background jobs, media handling, and AI orchestration in the home node — never in the browser.
+3. Keep the complete local state in **SQLite in WAL mode**. At this scale PostgreSQL, Redis, and Kubernetes would add operational cost without a useful benefit.
+4. Run local inference behind an internal, provider-neutral inference gateway. Use Ollama for the MVP; allow an OpenAI-compatible remote endpoint later without changing domain logic.
+5. Integrate Webshare as a provider adapter. Prefer a just-in-time direct video link, with a same-origin Range relay as a tested fallback. Do not assume transcoding is performed by Webshare.
+6. Use an incremental, provider-driven metadata cache, not a full mirror of external databases.
+7. Propose TMDB as the canonical metadata source for the non-commercial MVP, with required attribution. Keep ČSFD as an optional, isolated enrichment connector. Do not use IMDb.
+8. Do not automate Rotten Tomatoes scraping without written authorization: its current terms prohibit automated collection and scraping. Keep the connector disabled and replace the score with an authorized source or manual entry. As default score source, use TMDB or ČSFD or Google Search as fallback. 
+9. Keep playback and all secrets local. Optionally synchronize only small user state through Cloudflare Workers + D1, with the local database remaining the source of truth.
+10. Do not expose the home node directly to the public internet. Use LAN access by default and a private overlay such as Tailscale for later remote access.
+
+## 2. Target topology
+
+```mermaid
+flowchart LR
+    C[Desktop / mobile / TV browser] -->|HTTPS on LAN or private overlay| G[Caddy gateway]
+    G --> A[Streamer app<br/>UI + API + job runner]
+    A --> DB[(Local SQLite + FTS5)]
+    A --> FS[Poster and response cache]
+    A --> W[Webshare adapter]
+    W --> WS[Webshare API / media]
+    A --> M[Metadata adapters]
+    M --> TMDB[Authorized canonical source]
+    M --> CSFD[Optional ČSFD enrichment]
+    A --> AG[Agent gateway]
+    AG --> O[Local Ollama]
+    AG -. explicit opt-in .-> R[Future remote inference]
+    A -. optional user-state sync over TLS .-> CW[Cloudflare Worker]
+    CW --> D1[(Cloudflare D1, EU)]
+    C -. direct-link fast path after capability test .-> WS
+```
+
+### Trust boundaries
+
+- The browser uses the Streamer origin for every application API. Only after the direct-play capability test may a playback ticket redirect the media element to a fresh, short-lived Webshare link; the browser never receives the Webshare password, WST session token, model-management access, or Cloudflare administrative credentials.
+- The app is the only component allowed to call provider APIs and the agent gateway. A verified direct media fetch is the sole browser-to-provider exception.
+- The model receives bounded task input, not credentials, stream URLs, raw cookies, or unrestricted database access.
+- Cloud sync receives no provider credentials, model prompts, media URLs, full catalog mirror, posters, or media files.
+- Scraped text is untrusted input. It cannot directly invoke a tool or modify records without schema validation and policy checks.
+
+## 3. Proposed implementation stack
+
+| Area | Proposal | Reason |
+|---|---|---|
+| Repository | TypeScript monorepo with pnpm | One language across UI, adapters, sync client, and the actively maintained ČSFD library |
+| UI | React + Vite PWA | Static, responsive client; simpler self-hosting than an SSR dependency |
+| Local API | Fastify + Zod/JSON Schema | Low overhead, streaming support, explicit contracts |
+| Local persistence | SQLite, WAL, migrations, FTS5 | Reliable single-node storage and search for thousands of titles |
+| Background work | Durable SQLite job table with leases, retry, and idempotency | Avoids Redis; survives process restarts |
+| Local inference | Ollama through the app-owned agent gateway | Easiest GPU-aware MVP runtime on Windows/Linux |
+| Reverse proxy | Caddy | Single HTTPS origin, security headers, optional internal CA |
+| Media fallback | Streaming HTTP Range relay; FFmpeg only as an optional later profile | Direct play stays cheap while incompatible media has an upgrade path |
+| Cloud sync | Optional Cloudflare Worker + D1 | Free tier is ample for small user-state sync |
+| Tests | Vitest, adapter contract tests, Playwright E2E, AI evaluation fixtures | External HTML/API and AI behavior require regression coverage |
+
+The application should be packaged as one image with two runtime modes (`serve` and `jobs`) or, initially, one process containing both. A separate database or queue service is not needed for the MVP. If a future public deployment needs multiple app replicas, replace the repository and job adapters with PostgreSQL-backed implementations; do not stretch SQLite across hosts.
+
+## 4. Local data layout
+
+The application data volume contains:
+
+```text
+data/
+  streamer.db                 # authoritative local state
+  cache/http/                 # bounded provider response cache
+  cache/posters/              # bounded image cache
+  backups/                    # encrypted, rotated SQLite backups
+```
+
+Rules:
+
+- SQLite is persistent storage, not merely a cache. The application must work when Cloudflare, ČSFD, search, or the model is offline.
+- Use FTS5 and normalized aliases for catalog search. A separate search engine is unnecessary at this scale.
+- Store source provenance, retrieval time, connector version, and expiry with every external metadata value.
+- Cache Webshare search results for 6–24 hours and negative results for a shorter period. Recheck file availability before playback.
+- Never persist Webshare direct links. Create one for each playback session and discard it when the session ends.
+- Back up SQLite using its online-backup mechanism, not by copying a live database and WAL files independently.
+- Keep daily encrypted backups for 7 days and weekly backups for 8 weeks; verify restore in CI or a scheduled local check.
+
+## 5. Metadata and discovery
+
+### 5.1 Canonical catalog
+
+The application needs a stable source for canonical IDs, localized titles, seasons, episodes, release dates, cast, and poster paths. Depending only on a scraper would make the catalog fragile.
+
+Proposed order:
+
+1. **TMDB adapter — canonical MVP source.** Its API is available for non-commercial use with attribution. A commercial future version must obtain the appropriate agreement.
+2. **ČSFD adapter — optional Czech enrichment.** Use `node-csfd-api`, pinned to an exact version, behind our own narrow `MetadataProvider` interface. Do not expose its MCP server to the model.
+3. **Rotten Tomatoes — disabled.** Current terms explicitly prohibit automated scraping/data collection. Activation requires documented permission; a manual user-entered score may be supported instead.
+4. **IMDb — excluded** by product decision.
+
+`node-csfd-api` is MIT-licensed and actively maintained, but that license covers its code, not rights to the data it retrieves. Therefore:
+
+- no full ČSFD mirror;
+- on-demand enrichment only for titles already in the local catalog;
+- concurrency 1, cache, backoff, circuit breaker, and a configurable minimum request interval;
+- no galleries, full reviews, or other unnecessary copyrighted content;
+- contract tests against a small set of records and graceful degradation when the DOM changes or an anti-bot challenge appears;
+- connector off by default until the operator accepts the source-specific terms and risks.
+
+### 5.2 News, trends, seasons, and web search
+
+Google Custom Search JSON API is not a viable new foundation: it is closed to new customers and existing customers must migrate by 2027-01-01. Scraping Google result pages is not an accepted fallback.
+
+The app should define a `SearchProvider` interface. For the MVP:
+
+- use canonical-source `trending`, `upcoming`, and release-date feeds for normal discovery;
+- keep general web research disabled until the operator supplies an API key;
+- provide **Brave Search API** as the proposed first general-search adapter: its current Search plan costs $5 per 1,000 requests and includes $5 in monthly credits, which is sufficient for a carefully cached household workload;
+- allow a Google adapter only when the operator already has valid programmatic access;
+- rate-limit and cache semantically equivalent discovery queries so background jobs cannot exhaust the allowance;
+- sanitize and store provenance for returned snippets before the model sees them;
+- never let the model open arbitrary URLs or decide which network host to contact.
+
+This preserves the requested future ability to use Google or another search provider without coupling the agent to a discontinued API.
+
+## 6. Webshare integration and playback
+
+The official API documents XML-over-HTTP endpoints for `salt`, `login`, `search`, `file_info`, and `file_link`. `file_link` supports `download_type=video_stream`, device metadata, and `force_https=1`, and returns a direct link. The documentation does **not** guarantee the link TTL, CORS, IP/device binding, byte-range support, or transcoding.
+
+### 6.1 Authentication
+
+1. Accept the Webshare password only during explicit onboarding.
+2. Request the account salt and compute the legacy digest required by Webshare in memory.
+3. Call `login` with `keep_logged_in=1` and store the returned WST as a field-encrypted local secret.
+4. Do not retain the plaintext password. If the WST can no longer be refreshed, ask the user to authenticate again.
+5. Treat WST and any reusable password digest as password-equivalent secrets. Never log or synchronize them.
+6. Use one stable random `device_uuid` per installation.
+
+Webshare often reports application errors inside an HTTP 200 XML response. The adapter must validate `<status>`, `<code>`, and `<message>`, not only the HTTP status.
+
+### 6.2 Matching flow
+
+1. Generate Webshare searches from canonical/original/localized title, year, and `SxxEyy` where applicable; set `category=video`.
+2. Normalize filenames and parse release tags deterministically: title, year, season/episode, resolution, codec hints, audio language, subtitle hints, source, and size.
+3. Eliminate unavailable, password-protected, provider-flagged copyrighted/non-public, or incompatible candidates.
+4. Rank by exact IDs/titles/year/episode and device/language preferences.
+5. Ask the local model only to rerank genuinely ambiguous finalists. It must not receive WST or download links.
+6. Save the selected `file_ident`, confidence, rationale codes, and alternatives; retain a manual correction path.
+
+### 6.3 Direct-first playback
+
+At play time:
+
+1. Verify the file with `file_info`.
+2. Request a fresh HTTPS link through `file_link(download_type=video_stream)`.
+3. If an installation-time capability test proves normal playback and seeking work, respond with a short-lived, single-purpose local playback ticket that resolves to a `302` direct-link fast path. Mark the redirect response `Cache-Control: no-store` and use a no-referrer policy; never place the direct URL in application logs or persistent state.
+4. If direct playback fails, use the same-origin Range relay. It accepts only an internal `file_ident`, validates the returned URL against an HTTPS Webshare host allowlist, streams without full buffering, and forwards `Range`, `If-Range`, `206`, `Content-Range`, `Content-Length`, `Content-Type`, and `Accept-Ranges` correctly.
+5. If the container is unsupported but streams are compatible, a later media profile may remux. Audio transcoding is the next fallback; video transcoding is last because it is the most expensive.
+
+The MVP does not promise universal MKV/HEVC/AC3/DTS playback. That promise is gated by the integration spike below. Exactly one active playback session is enforced for the initial scope.
+
+### 6.4 Mandatory Webshare spike
+
+Before treating playback as implemented, run contract tests with a real user-owned/authorized account:
+
+- request `Range: bytes=0-0` and verify `206`, `Content-Range`, and `Accept-Ranges`;
+- seek forward/backward in the browser;
+- establish link TTL and whether a link works from another LAN device;
+- refresh on `401`, `403`, and expired/missing link responses;
+- test MP4/H.264/AAC, MKV/H.264, HEVC, and common AC3/DTS variants;
+- confirm practical API search pagination and throttling behavior;
+- verify that provider flags and access restrictions are honored.
+
+No logic may bypass provider restrictions, access controls, copyright flags, or account/device limits. The product is for media the user is authorized to access.
+
+## 7. Optional Cloudflare sync
+
+Yes, a free Cloudflare tier is sufficient for this scope. Use **Workers + D1**, not KV, as the authoritative cloud-side sync store. The local SQLite database remains authoritative and playback never waits for cloud sync.
+
+Verified free-tier limits as of the research date:
+
+| Resource | Free allowance relevant here |
+|---|---:|
+| Worker requests | 100,000/day |
+| D1 rows read | 5,000,000/day |
+| D1 rows written | 100,000/day |
+| D1 storage | 5 GB/account, maximum 500 MB per free database |
+| D1 point-in-time recovery | 7 days on Free |
+
+Create the database with EU jurisdiction at creation time; it cannot be added later. D1 encrypts data at rest with AES-256-GCM and uses TLS in transit. The MVP minimizes synchronized personal data and never sends secrets. Optional field encryption with a Worker-held key can additionally protect stored rows and backups, but it is not end-to-end encryption because the Worker must decrypt the payload while processing it. True end-to-end encrypted sync is a separate future design because it changes conflict resolution and recovery. Cloudflare still must not receive Webshare credentials or local account password material.
+
+### 7.1 Synchronized data
+
+Include:
+
+- profile display settings and preferences;
+- favorites/watchlist;
+- watch progress and completion events;
+- recommendation feedback;
+- explicit title-match corrections;
+- UI language and safe device-independent settings.
+
+Exclude:
+
+- Webshare password, WST, cookies, and direct links;
+- local account password hashes and encryption master keys;
+- media, posters, complete catalog, scraped pages, and provider caches;
+- prompts, raw model context, hardware inventory, and diagnostic logs unless explicitly exported by the user.
+
+### 7.2 Offline-first protocol
+
+- Write every local change and an outbox operation in one SQLite transaction.
+- Use UUIDv7 `op_id`, installation `device_id`, `profile_id`, entity identity, schema version, hybrid logical timestamp, payload, and optional tombstone.
+- `POST /v1/sync/push` sends idempotent batches; `GET /v1/sync/pull?after=<opaque_cursor>` returns deltas.
+- Retry with exponential backoff and jitter. If limits or Cloudflare fail, keep the outbox and show `sync pending`; never block local use.
+- Upload watch position at most every 30–60 seconds and on pause, stop, or completion.
+- Use per-field last-write-wins for scalar preferences, add-wins semantics for lists, append-only recommendation/history events, and session-aware progress merging so an offline device does not casually move progress backwards.
+- Use tombstones and retain the sync change log for at least 90 days; stale devices receive a fresh snapshot.
+- Hide Cloudflare behind `SyncRepository` and a versioned HTTP contract. Supported implementations start as `LocalOnlySyncRepository` and `D1SyncRepository`; a future remote PostgreSQL service can use the same protocol.
+
+Cloud sync is an optional deployment profile (`SYNC_PROVIDER=local` by default, `cloudflare-d1` after setup), not a required dependency.
+
+## 8. Local accounts, profiles, and secrets
+
+MVP identity is one household installation with one administrator and up to five profiles.
+
+- Local administrator passwords use Argon2id with a per-user salt; profile PINs, if offered, are separately rate-limited.
+- Google and Apple sign-in are deferred until a hosted identity/callback service exists. They are unnecessary for a private LAN MVP.
+- Generate an installation master key outside the database. Prefer the OS credential vault; where container boundaries prevent it, mount a dedicated key file with restrictive host ACLs.
+- Encrypt provider tokens and other recoverable secrets using an authenticated cipher with a random nonce per value and versioned key ID.
+- Never put secrets in images, source control, Compose files, logs, URLs, crash reports, or AI prompts.
+- Support secret rotation and explicit provider disconnect, which deletes local provider credentials and invalidates sessions where the provider supports it.
+
+## 9. Network exposure
+
+### Initial desktop profile
+
+- Windows 11 or Linux desktop with 8 GB GPU VRAM.
+- App and gateway via Docker Compose; Ollama may run natively on the host for simpler GPU support.
+- When a containerized backend calls host-native Ollama, use the platform's explicit host bridge (`host.docker.internal` on Docker Desktop or a narrowly scoped `host-gateway` mapping on Linux) and firewall the Ollama listener to the host/container bridge. If that restriction cannot be enforced, run Ollama inside the private Compose network instead.
+- Expose only the HTTPS UI/gateway port to the LAN.
+- Bind Ollama and internal management endpoints to loopback, the host/container bridge, or a private container network as appropriate for the chosen profile. Never publish port `11434` to the LAN or internet.
+- Restrict CORS to the Streamer origin and use CSRF protection, secure cookies, CSP, and strict outbound URL allowlists.
+
+### Remote household access
+
+Use a private overlay/VPN and keep media traffic off Cloudflare Workers/D1. Do not open a router port directly. Public multi-tenant exposure is a separate architecture and security review.
+
+### Future remote inference
+
+The agent gateway supports `ollama` and generic `openai-compatible` adapters. Switching inference must require explicit user consent, TLS, an encrypted API key, data-redaction policy, timeouts, budget/rate limits, and a visible indicator that data leaves the home node. Local-to-remote fallback must never happen silently.
+
+## 10. Runtime configuration contract
+
+Illustrative non-secret configuration:
+
+```text
+APP_MODE=home
+APP_ORIGIN=https://streamer.home.arpa
+DATA_DIR=/data
+PLAYBACK_MODE=direct-first
+INFERENCE_PROVIDER=ollama
+INFERENCE_BASE_URL=http://ollama:11434
+INFERENCE_MODEL=qwen3.5:4b
+SYNC_PROVIDER=local
+METADATA_PRIMARY=tmdb
+METADATA_CSFD_ENABLED=false
+METADATA_RT_ENABLED=false
+WEB_SEARCH_PROVIDER=disabled
+```
+
+The example assumes Ollama is the private Compose service named `ollama` and uses its native API. For a native backend use `http://127.0.0.1:11434`; for a containerized backend with host-native Ollama use the secured host-bridge address described above. Secrets are referenced from the local secret store rather than placed directly in this file.
+
+## 11. Health, observability, and degradation
+
+Expose local-only health information:
+
+- `/health/live`: process is running;
+- `/health/ready`: migrations complete, data directory writable, SQLite available;
+- `/health/dependencies`: Webshare session, metadata providers, agent, disk budget, backup age, and optional cloud sync status.
+
+Use structured logs with correlation IDs and redaction. Do not log queries that can reveal viewing history by default. Retain bounded local logs and expose a user-reviewed diagnostic export.
+
+Expected degraded behavior:
+
+| Failure | Required behavior |
+|---|---|
+| Local model unavailable/OOM | Deterministic matching, search, and playback continue; AI jobs pause |
+| ČSFD blocked or parser broken | Canonical metadata remains; enrichment is marked stale |
+| General search unavailable | Existing catalog and canonical trend feeds remain |
+| Cloudflare unavailable/over limit | Local writes continue and outbox waits |
+| Direct Webshare link fails | Refresh once, then try Range relay, then report a clear provider error |
+| Unsupported codec | Offer another candidate; optional remux/transcode only if enabled |
+| Remote inference unavailable | Do not silently send to another provider; fall back to local/deterministic behavior |
+
+## 12. Updates, backup, and rollback
+
+- Pin container images and the model artifact/digest; avoid unattended major updates.
+- Run migrations on a backup copy first, then take an online backup before production migration.
+- Keep the previous app image and schema-compatible rollback path.
+- Verify model checksum/digest after download and keep the previous approved model until the new one passes the evaluation suite.
+- Cache and poster data are disposable; the SQLite database, master key, and user-approved encrypted backups are not.
+- A restore test must prove that profiles, progress, provider mappings, and manual corrections recover without restoring provider plaintext credentials from cloud sync.
+
+## 13. Delivery phases
+
+### Phase 0 — risk spikes
+
+- Webshare login/search/direct-link/Range/codec spike with authorized test files.
+- Qwen 4B versus 9B evaluation on the actual 8 GB GPU.
+- Validate TMDB attribution and ČSFD connector terms/rate policy.
+- Define the title/episode/media-variant domain model and test fixture set.
+
+### Phase 1 — local core
+
+- PWA, local accounts/profiles, SQLite schema/FTS, Webshare adapter, deterministic matching, direct-first playback, progress, backup, and visible synchronization freshness.
+
+### Phase 2 — local agent
+
+- Agent gateway, hardware preflight, Qwen 4B, structured matching/labels/recommendation reranking, audit trail, and evaluation dashboard.
+
+### Phase 3 — optional cloud state sync
+
+- Worker + D1 EU deployment, outbox protocol, device pairing, conflict tests, deletion/export, and offline recovery.
+
+### Phase 4 — optional capabilities
+
+- Authorized general web search provider, media remux/transcode profile, private remote access, remote inference provider, and only later a separately designed public/SaaS topology.
+
+## 14. Acceptance gates
+
+The deployment proposal is implemented only when:
+
+- a fresh install reaches a usable local library without Cloudflare or the model;
+- the browser can play, seek, resume, and stop one authorized Webshare stream without leaking WST;
+- all external connector calls have timeout, retry/backoff, rate limit, cache, provenance, and circuit breaker behavior;
+- AI outputs are schema-validated and cannot execute arbitrary network, shell, or database operations;
+- the app survives model OOM and cloud outage without corrupting local state;
+- two devices can create offline changes and converge through the sync conflict rules;
+- backup restore is tested;
+- no secrets or viewing history appear in default logs;
+- deletion/export covers profile, watch history, learned preferences, AI-derived labels, and cloud sync state.
+
+## 15. Approval record
+
+Approval is requested for these material choices:
+
+- [ ] Home-node, local-first topology with no public port exposure.
+- [ ] TypeScript + React/Vite + Fastify + local SQLite stack.
+- [ ] TMDB as proposed canonical non-commercial metadata source; optional isolated ČSFD enrichment; no IMDb.
+- [ ] Rotten Tomatoes automation disabled unless written authorization is obtained.
+- [ ] Provider-neutral web-search interface, with optional Brave Search as the first supported adapter and no new dependency on the retiring Google Custom Search API.
+- [ ] Webshare direct-first playback with tested Range relay fallback; transcoding postponed until the codec spike proves it necessary.
+- [ ] Optional Cloudflare Worker + D1 EU sync for small user state only; all provider secrets remain local.
+- [ ] Provider-neutral AI gateway with local Qwen 4B default and explicit remote opt-in, as detailed in `LOCAL_AGENT.md`.
+
+## References
+
+- [Webshare Web API Reference](https://webshare.cz/apidoc/)
+- [node-csfd-api repository](https://github.com/bartholomej/node-csfd-api)
+- [TMDB API FAQ and attribution/commercial-use notes](https://developer.themoviedb.org/docs/faq)
+- [Rotten Tomatoes Terms of Use](https://www.rottentomatoes.com/policies/terms-of-use)
+- [Google Custom Search JSON API status](https://developers.google.com/custom-search/v1/overview)
+- [Brave Search API and current pricing](https://brave.com/search/api/)
+- [Cloudflare D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)
+- [Cloudflare D1 limits](https://developers.cloudflare.com/d1/platform/limits/)
+- [Cloudflare D1 data security](https://developers.cloudflare.com/d1/reference/data-security/)
+- [Cloudflare D1 data location](https://developers.cloudflare.com/d1/configuration/data-location/)
+- [Cloudflare Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+
