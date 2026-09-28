@@ -1,79 +1,142 @@
-# Integration experience contract
+# Integration development
 
-Every Streamer integration is a product feature, not a configuration-file
-exercise. A user should be able to connect a provider from the application,
-understand why access is needed, verify it immediately and recover from a
-failure without reading server logs.
+Integrations are replaceable adapters. A provider name must not leak into
+Library, History, UI routing or canonical identity. The normative product and
+compliance rules are in [`../instructions/INTEGRATIONS.md`](../instructions/INTEGRATIONS.md).
 
-## Required setup flow
+## Extension points
 
-Each adapter must expose enough metadata for the setup UI to provide the same
-guided sequence:
+Provider-neutral interfaces are exported from `@streamer-ai/contracts`:
 
-1. **Discover** — detect a local service automatically where possible and show
-   whether an optional remote provider is already connected.
-2. **Explain** — state what the provider supplies, which data leaves the home
-   node, what is stored and whether the integration is required.
-3. **Guide** — link directly to the provider's official credential/setup page
-   and ask only for the minimum required values.
-4. **Verify** — perform a bounded, side-effect-free connection check with a
-   timeout before persisting anything.
-5. **Connect** — store credentials through `SecretStore`; persist only an opaque
-   secret reference and sanitized provider metadata in SQLite.
-6. **Confirm** — clear credential inputs and return a status that never contains
-   the credential, secret reference, raw upstream body or sensitive headers.
-7. **Monitor** — expose last successful check, a human-readable degraded state
-   and an explicit recheck action.
-8. **Disconnect** — explain the impact, delete the secret and cached private
-   provider state, and leave unrelated local library data intact.
+| Contract | Supplies |
+| --- | --- |
+| `MetadataProvider` | Deterministic title identity, metadata, artwork and ratings. |
+| `MediaProvider` | Availability recheck, formats and series coverage. |
+| `SubtitleProvider` | Subtitle-source capability. |
+| `SearchProvider` | Bounded web discovery capability. |
+| `AgentProvider` | Conversational interpretation and ranking. |
+| `SyncProvider` | Optional encrypted remote state synchronization. |
 
-Environment variables may provide developer/test overrides, but they are not
-the normal household onboarding experience.
+The server-level `StreamerContentProvider` composes those fine-grained
+adapters into Home and discovery behavior:
 
-## Error language
+```ts
+export interface StreamerContentProvider {
+  readonly id: string;
+  bootstrapTitles(): readonly CatalogTitle[];
+  buildHome(input: HomeFeedInput): HomeFeed;
+  discover(
+    request: DiscoveryRequest,
+    completedAt: string,
+  ): Promise<DiscoveryResponse>;
+}
+```
 
-Adapters translate upstream failures into stable public codes. The UI owns the
-localized message and next action.
+Inject a live implementation at the composition root:
 
-| Public code | User action |
-|---|---|
-| `INVALID_CREDENTIALS` | Check or replace the credential. |
-| `PERMISSION_MISSING` | Open the provider settings and grant the documented scope. |
-| `RATE_LIMITED` | Wait until the displayed retry time; local features continue. |
-| `PROVIDER_UNAVAILABLE` | Retry later; keep the existing connection and cache. |
-| `NETWORK_UNREACHABLE` | Check this device's network or local service address. |
-| `INVALID_RESPONSE` | Retry, then offer a redacted diagnostic export. |
-| `UNSUPPORTED_VERSION` | Update the local service or choose a supported adapter. |
+```ts
+const app = createApp({
+  contentProvider: new LiveContentCoordinator({
+    agent,
+    search,
+    metadataProviders,
+    mediaProviders,
+  }),
+});
+```
 
-Raw provider messages are diagnostic data. They are redacted and are never
-treated as safe UI copy.
+`StreamerCore` validates coordinator output, stores every returned title in the
+canonical cache, decorates profile membership, and owns Library and History.
+Do not duplicate those responsibilities in an adapter.
 
-## TMDB first implementation
+## Adding a provider
 
-- Ask for the **API Read Access Token**, not an account password.
-- Link to the official TMDB API settings and authentication documentation.
-- Normalize accidental surrounding whitespace and an optional pasted `Bearer `
-  prefix locally.
-- Verify with an authenticated, read-only TMDB configuration request.
-- Derive supported image configuration automatically after validation.
-- Store the token as `tmdb.read_access_token` through `SecretStore`.
-- Store only connection status, timestamps and non-sensitive configuration in
-  SQLite.
-- Never expose the token to profiles, the local model, logs or cloud sync.
+1. Create a small adapter under `apps/server/src/integrations` or a dedicated
+   workspace package when the implementation is substantial.
+2. Give it a stable lowercase ID independent of display name.
+3. Validate all upstream input. Treat HTTP success with malformed data as
+   `INVALID_RESPONSE`.
+4. Add timeouts, bounded concurrency, rate limiting, exponential backoff and
+   cache policy appropriate to the provider.
+5. Map external entities to internal canonical IDs; never use the provider ID
+   as the application primary key.
+6. Record provenance and timestamps for every factual claim.
+7. Translate errors to stable public codes and redact upstream bodies.
+8. Add the guided setup metadata and safe connection check.
+9. Wire the adapter into a coordinator through dependency injection.
+10. Test success, authentication failure, timeout, malformed response, rate
+    limit, offline cache behavior and secret non-disclosure.
 
-TMDB attribution and non-commercial-use requirements remain visible in the
-About/data-sources screen; successful authentication does not replace those
-requirements.
+## Guided connection contract
+
+Every credentialed integration follows the same user flow:
+
+1. Detect a local service automatically where possible.
+2. Explain what the provider supplies and which data leaves the device.
+3. Link to the official credential/setup page and request only minimum scope.
+4. Run a bounded, read-only verification before persisting anything.
+5. Store the credential through `SecretStore`; store only sanitized status and
+   an opaque reference elsewhere.
+6. Clear the credential field and return only allow-listed public fields.
+7. Show last check, degraded state and an explicit recheck action.
+8. On disconnect, remove the secret and private provider cache without
+   deleting unrelated Library or History data.
+
+Environment variables may support tests and developer overrides. They are not
+the normal household setup experience.
+
+## Metadata providers
+
+The first planned live metadata adapter is TMDB. CSFD and Rotten Tomatoes are
+optional enrichers with separate provenance and stricter scraping gates. A
+metadata adapter must resolve ambiguous titles deterministically using stable
+IDs, year, media kind and aliases. Never let the agent invent a provider ID or
+rating.
+
+Ratings retain their source and scale. Do not silently merge unlike rating
+systems into one unexplained score.
+
+## Media providers
+
+A media adapter performs an availability check for a canonical title and
+returns normalized formats. It must distinguish:
+
+- `available` - at least one currently verified playable variant;
+- `partial` - some verified series episodes/seasons are missing;
+- `unavailable` - the provider answered and no playable variant exists;
+- `unknown` - the check could not establish current availability.
+
+Direct media URLs are short-lived server concerns. Do not persist them in
+canonical records, expose provider credentials to the browser, or treat search
+results as playable before a final recheck.
+
+## Agent and search providers
+
+The agent receives the user request, profile preferences and validated
+candidate facts. Tool output is untrusted input. Search content cannot override
+system policy, request credentials or call arbitrary URLs.
+
+The coordinator must remove candidates that fail metadata resolution before
+ranking. It must also recheck media availability before returning the Play
+action. The final response is parsed with `DiscoveryResponseSchema`.
+
+## Subtitle and sync providers
+
+Subtitle sources are independent adapters selected after the exact media
+variant is known. Normalize language, release matching, hearing-impaired flags
+and provenance. A subtitle failure must not corrupt playback state.
+
+Sync is optional. The local SQLite database remains authoritative for offline
+use. Sync only allow-listed user state, encrypt sensitive payloads before they
+leave the home node, and resolve events idempotently. Provider credentials and
+ephemeral playback URLs never enter sync data.
 
 ## Review checklist
 
-An integration is not complete until it has:
-
-- adapter contract tests for success, authentication failure, timeout,
-  malformed response and rate limiting;
-- a setup UI test proving secrets disappear after connection;
-- log and response tests proving sentinel credentials cannot escape;
-- health, recheck and disconnect behavior;
-- cache/rate/backoff limits and provenance for imported data;
-- an offline/degraded behavior that does not block unrelated local features;
-- localized English, Czech and German user-facing copy before general release.
+- The adapter can be replaced without editing feature routes or UI components.
+- Every claim has source provenance and a freshness timestamp.
+- Offline/degraded behavior leaves cached local features usable.
+- Logs and public responses are proven not to contain sentinel secrets.
+- Tests cover retries without duplicate work or state.
+- Setup is usable from the application without manual file editing.
+- English, Czech and German user copy is ready before general release.

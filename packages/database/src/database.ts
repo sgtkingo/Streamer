@@ -2,8 +2,11 @@ import BetterSqlite3 from "better-sqlite3";
 
 import { applyMigrations } from "./migrations.js";
 import {
+  CatalogTitlesRepository,
+  HistoryRepository,
   IntegrationsRepository,
   JobsRepository,
+  LibraryRepository,
   ProfilesRepository,
   SettingsRepository,
   SyncOutboxRepository,
@@ -20,6 +23,9 @@ export class StreamerDatabase {
   readonly settings: SettingsRepository;
   readonly profiles: ProfilesRepository;
   readonly integrations: IntegrationsRepository;
+  readonly titles: CatalogTitlesRepository;
+  readonly library: LibraryRepository;
+  readonly history: HistoryRepository;
   readonly jobs: JobsRepository;
   readonly syncOutbox: SyncOutboxRepository;
 
@@ -32,17 +38,24 @@ export class StreamerDatabase {
     this.settings = new SettingsRepository(connection, clock);
     this.profiles = new ProfilesRepository(connection, clock);
     this.integrations = new IntegrationsRepository(connection, clock);
+    this.titles = new CatalogTitlesRepository(connection, clock);
+    this.library = new LibraryRepository(connection, clock);
+    this.history = new HistoryRepository(connection, clock);
     this.jobs = new JobsRepository(connection, clock);
     this.syncOutbox = new SyncOutboxRepository(connection, clock);
   }
 
   getJournalMode(): string {
-    return String(this.connection.pragma("journal_mode", { simple: true })).toLowerCase();
+    return String(
+      this.connection.pragma("journal_mode", { simple: true }),
+    ).toLowerCase();
   }
 
   getAppliedMigrationVersions(): number[] {
     return (
-      this.connection.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>
+      this.connection
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all() as Array<{ version: number }>
     ).map(({ version }) => version);
   }
 
@@ -62,11 +75,19 @@ export class StreamerDatabase {
   }
 }
 
-export function openStreamerDatabase(options: OpenStreamerDatabaseOptions): StreamerDatabase {
+export function openStreamerDatabase(
+  options: OpenStreamerDatabaseOptions,
+): StreamerDatabase {
   const clock = options.clock ?? (() => new Date());
   const busyTimeoutMs = options.busyTimeoutMs ?? 5_000;
-  if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 60_000) {
-    throw new Error("SQLite busy timeout must be an integer between 0 and 60000ms.");
+  if (
+    !Number.isInteger(busyTimeoutMs) ||
+    busyTimeoutMs < 0 ||
+    busyTimeoutMs > 60_000
+  ) {
+    throw new Error(
+      "SQLite busy timeout must be an integer between 0 and 60000ms.",
+    );
   }
   const database = new BetterSqlite3(options.filename);
 
@@ -74,9 +95,13 @@ export function openStreamerDatabase(options: OpenStreamerDatabaseOptions): Stre
     database.pragma("foreign_keys = ON");
     database.pragma(`busy_timeout = ${busyTimeoutMs}`);
     database.pragma("synchronous = NORMAL");
-    const journalMode = String(database.pragma("journal_mode = WAL", { simple: true })).toLowerCase();
+    const journalMode = String(
+      database.pragma("journal_mode = WAL", { simple: true }),
+    ).toLowerCase();
     if (options.filename !== ":memory:" && journalMode !== "wal") {
-      throw new Error(`SQLite WAL mode is required; received '${journalMode}'.`);
+      throw new Error(
+        `SQLite WAL mode is required; received '${journalMode}'.`,
+      );
     }
     applyMigrations(database, () => clock().toISOString());
     return new StreamerDatabase(database, clock);

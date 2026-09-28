@@ -1,5 +1,15 @@
 export { createApp, type CreateAppOptions } from "./app.js";
 export {
+  StreamerCore,
+  UnknownTitleError,
+  UnplayableTitleError,
+} from "./services/streamer-core.js";
+export {
+  PreviewContentProvider,
+  type HomeFeedInput,
+  type StreamerContentProvider,
+} from "./services/content-provider.js";
+export {
   checkTmdbConnection,
   TMDB_CONFIGURATION_URL,
   type FetchLike,

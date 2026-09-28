@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   CompleteSetupRequestSchema,
+  CatalogTitleSchema,
+  DiscoveryResponseSchema,
   HealthResponseSchema,
   INTEGRATION_DESCRIPTORS,
   IntegrationConnectionResultSchema,
@@ -58,7 +60,9 @@ describe("public contracts", () => {
   });
 
   it("keeps TMDB credentials inbound-only", () => {
-    expect(TmdbConnectRequestSchema.parse({ token: `  ${"t".repeat(24)}  ` })).toEqual({
+    expect(
+      TmdbConnectRequestSchema.parse({ token: `  ${"t".repeat(24)}  ` }),
+    ).toEqual({
       token: "t".repeat(24),
     });
     expect(() =>
@@ -92,5 +96,71 @@ describe("public contracts", () => {
       profile: { name: "Family", locale: "cs", preferences: ["Comedy"] },
       localAiEnabled: true,
     });
+  });
+
+  it("requires a verified format before a title can be called available", () => {
+    expect(() =>
+      CatalogTitleSchema.parse({
+        id: "title-1",
+        kind: "movie",
+        title: "Example",
+        originalTitle: null,
+        year: 2026,
+        synopsis: "Example synopsis",
+        posterUrl: null,
+        backdropUrl: null,
+        accentColor: "#112233",
+        genres: [],
+        ratings: [],
+        matchPercent: null,
+        availability: "available",
+        availabilityProvider: "media-test",
+        availabilityCheckedAt: "2026-09-27T10:00:00.000Z",
+        formats: [],
+        seriesCoverage: null,
+        metadataProvider: "metadata-test",
+        metadataValidatedAt: "2026-09-27T10:00:00.000Z",
+        inLibrary: false,
+        progressPercent: null,
+      }),
+    ).toThrow(/verified format/);
+  });
+
+  it("rejects duplicate discovery titles and an unavailable best match", () => {
+    const unavailable = {
+      id: "title-1",
+      kind: "movie" as const,
+      title: "Example",
+      originalTitle: null,
+      year: 2026,
+      synopsis: "Example synopsis",
+      posterUrl: null,
+      backdropUrl: null,
+      accentColor: "#112233",
+      genres: [],
+      ratings: [],
+      matchPercent: 90,
+      availability: "unavailable" as const,
+      availabilityProvider: "media-test",
+      availabilityCheckedAt: "2026-09-27T10:00:00.000Z",
+      formats: [],
+      seriesCoverage: null,
+      metadataProvider: "metadata-test",
+      metadataValidatedAt: "2026-09-27T10:00:00.000Z",
+      inLibrary: false,
+      progressPercent: null,
+    };
+    expect(() =>
+      DiscoveryResponseSchema.parse({
+        sessionId: "session-1",
+        stage: "completed",
+        reply: "Result",
+        bestMatch: { title: unavailable, reason: "Reason" },
+        available: [],
+        unavailable: [{ title: unavailable, reason: "Reason" }],
+        warnings: [],
+        completedAt: "2026-09-27T10:00:00.000Z",
+      }),
+    ).toThrow();
   });
 });

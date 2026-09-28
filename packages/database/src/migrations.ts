@@ -116,9 +116,71 @@ export const MIGRATIONS: readonly Migration[] = [
         WHERE delivered_at IS NULL;
     `,
   },
+  {
+    version: 4,
+    name: "on_demand_catalog_library_and_history",
+    sql: `
+      CREATE TABLE canonical_titles (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 160),
+        kind TEXT NOT NULL CHECK (kind IN ('movie', 'series')),
+        title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 240),
+        normalized_json TEXT NOT NULL CHECK (json_valid(normalized_json)),
+        metadata_provider TEXT NOT NULL CHECK (length(metadata_provider) BETWEEN 1 AND 80),
+        metadata_validated_at TEXT NOT NULL,
+        availability_state TEXT NOT NULL CHECK (
+          availability_state IN ('available', 'partial', 'unavailable', 'unknown')
+        ),
+        availability_checked_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE external_entity_mappings (
+        title_id TEXT NOT NULL REFERENCES canonical_titles(id) ON DELETE CASCADE,
+        provider_id TEXT NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 80),
+        external_id TEXT NOT NULL CHECK (length(external_id) BETWEEN 1 AND 160),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('movie', 'series', 'season', 'episode')),
+        retrieved_at TEXT NOT NULL,
+        PRIMARY KEY (provider_id, external_id, entity_type)
+      ) STRICT;
+
+      CREATE INDEX external_entity_mappings_title_idx ON external_entity_mappings (title_id);
+
+      CREATE TABLE library_entries (
+        profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        title_id TEXT NOT NULL REFERENCES canonical_titles(id) ON DELETE CASCADE,
+        membership_reason TEXT NOT NULL CHECK (membership_reason IN ('explicit', 'playback')),
+        state TEXT NOT NULL CHECK (state IN ('saved', 'in-progress', 'completed')),
+        progress_percent REAL CHECK (progress_percent IS NULL OR progress_percent BETWEEN 0 AND 100),
+        added_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_played_at TEXT,
+        PRIMARY KEY (profile_id, title_id)
+      ) STRICT;
+
+      CREATE INDEX library_entries_profile_state_idx
+        ON library_entries (profile_id, state, updated_at DESC);
+
+      CREATE TABLE watch_history_events (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 120),
+        profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        title_id TEXT NOT NULL REFERENCES canonical_titles(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL CHECK (event_type IN ('start', 'progress', 'stop', 'complete')),
+        episode_label TEXT CHECK (episode_label IS NULL OR length(episode_label) BETWEEN 1 AND 120),
+        progress_percent REAL NOT NULL CHECK (progress_percent BETWEEN 0 AND 100),
+        occurred_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX watch_history_events_profile_time_idx
+        ON watch_history_events (profile_id, occurred_at DESC, id DESC);
+    `,
+  },
 ] as const;
 
-export function applyMigrations(database: BetterSqlite3.Database, now: () => string): void {
+export function applyMigrations(
+  database: BetterSqlite3.Database,
+  now: () => string,
+): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY NOT NULL,
@@ -128,9 +190,11 @@ export function applyMigrations(database: BetterSqlite3.Database, now: () => str
   `);
 
   const applied = new Set(
-    (database.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>).map(
-      ({ version }) => version,
-    ),
+    (
+      database
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all() as Array<{ version: number }>
+    ).map(({ version }) => version),
   );
   const insertMigration = database.prepare(
     "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",

@@ -73,7 +73,5 @@ export function createAppLogger({
     },
   };
 
-  return destination === undefined
-    ? pino(options)
-    : pino(options, destination);
+  return destination === undefined ? pino(options) : pino(options, destination);
 }

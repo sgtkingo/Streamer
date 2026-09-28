@@ -19,6 +19,7 @@ data/
 *.sqlite3
 
 *.log
+*.tsbuildinfo
 .DS_Store
 Thumbs.db
 .idea/

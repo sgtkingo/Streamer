@@ -3,7 +3,11 @@ import { z } from "zod";
 import { IntegrationPublicStatusSchema } from "./integrations.js";
 import { SupportedLocaleSchema } from "./locales.js";
 
-export const SERVICE_HEALTH_STATES = ["healthy", "degraded", "unavailable"] as const;
+export const SERVICE_HEALTH_STATES = [
+  "healthy",
+  "degraded",
+  "unavailable",
+] as const;
 
 export const ServiceHealthStateSchema = z.enum(SERVICE_HEALTH_STATES);
 

@@ -14,10 +14,7 @@ export function tmdbConfiguration() {
   };
 }
 
-export function response(
-  status: number,
-  payload: unknown,
-): FetchResponseLike {
+export function response(status: number, payload: unknown): FetchResponseLike {
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -27,9 +24,6 @@ export function response(
   };
 }
 
-export function fetchReturning(
-  status: number,
-  payload: unknown,
-): FetchLike {
+export function fetchReturning(status: number, payload: unknown): FetchLike {
   return async () => response(status, payload);
 }

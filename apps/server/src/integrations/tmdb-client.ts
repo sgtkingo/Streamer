@@ -39,17 +39,22 @@ export type TmdbConnectionCheck =
     };
 
 function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
 }
 
-/** Only validates the small stable subset Streamer needs from TMDB configuration. */
+/** Only validates the small stable subset StreamerAI needs from TMDB configuration. */
 function isTmdbConfiguration(value: unknown): boolean {
   if (typeof value !== "object" || value === null) {
     return false;
   }
 
   const configuration = value as Record<string, unknown>;
-  if (typeof configuration.images !== "object" || configuration.images === null) {
+  if (
+    typeof configuration.images !== "object" ||
+    configuration.images === null
+  ) {
     return false;
   }
 

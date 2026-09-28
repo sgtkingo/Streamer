@@ -1,9 +1,9 @@
-# Streamer
+# StreamerAI
 
-Streamer is a local-first, self-hosted film and series library. It combines an
-incremental metadata catalog, provider-backed playback, household profiles and
-a bounded local AI assistant without making playback depend on the model or a
-cloud service.
+StreamerAI is a local-first, self-hosted film and series discovery application.
+The user describes a mood, person, era or viewing context; a bounded agent
+proposes candidates, while deterministic adapters validate metadata and media
+availability before anything is shown as factual or playable.
 
 The repository is at the first implementation milestone. The approved product,
 deployment and agent decisions live in [`instructions/`](instructions/).
@@ -11,15 +11,20 @@ deployment and agent decisions live in [`instructions/`](instructions/).
 ## Current milestone
 
 - TypeScript/pnpm monorepo.
-- React/Vite installable web application with guided onboarding.
-- Fastify local API with health and integration setup endpoints.
-- SQLite persistence in WAL mode with migrations and bounded profile storage.
+- React/Vite installable web application with conversational Home, Library,
+  Watch History and guided onboarding.
+- Fastify local API with Home, discovery, Library, History, health and setup
+  endpoints.
+- SQLite persistence in WAL mode for profiles, an on-demand canonical cache,
+  provider ID mappings, Library and append-only History.
 - TMDB connection verification designed around an in-app guided setup flow.
-- Provider-neutral boundaries for Webshare, local AI and optional sync work.
+- Provider-neutral contracts for metadata, media, subtitle, search, agent and
+  sync adapters.
 
-The first milestone deliberately does not claim working Webshare playback,
-Cloudflare synchronization or autonomous catalog matching. Those features have
-mandatory integration and safety gates in
+The current development feed is explicitly labeled as preview data. It does not
+claim working Webshare playback, live provider ratings, Cloudflare sync or a
+finished autonomous discovery pipeline. Those features have mandatory
+integration and safety gates in
 [`instructions/DEPLOY.md`](instructions/DEPLOY.md).
 
 ## Prerequisites

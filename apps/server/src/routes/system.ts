@@ -29,7 +29,7 @@ export function registerSystemRoutes(
 ): void {
   app.get("/api/v1/health/live", async () => ({
     status: "ok",
-    service: "streamer-server",
+    service: "streamer-ai-server",
     timestamp: dependencies.now().toISOString(),
   }));
 

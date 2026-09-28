@@ -64,7 +64,9 @@ export const INTEGRATION_HEALTH_STATES = [
 
 export const IntegrationHealthStateSchema = z.enum(INTEGRATION_HEALTH_STATES);
 
-export type IntegrationHealthState = z.infer<typeof IntegrationHealthStateSchema>;
+export type IntegrationHealthState = z.infer<
+  typeof IntegrationHealthStateSchema
+>;
 
 export const CREDENTIAL_STATES = ["not-required", "missing", "stored"] as const;
 
@@ -89,11 +91,16 @@ export const IntegrationSetupActionSchema = z
     action: z.enum(SETUP_ACTIONS),
     label: LocalizedTextSchema,
     /** Internal application route only. External documentation belongs to the descriptor. */
-    href: z.string().regex(/^\/(?!\/)/, "Expected an application-relative path").optional(),
+    href: z
+      .string()
+      .regex(/^\/(?!\/)/, "Expected an application-relative path")
+      .optional(),
   })
   .strict();
 
-export type IntegrationSetupAction = z.infer<typeof IntegrationSetupActionSchema>;
+export type IntegrationSetupAction = z.infer<
+  typeof IntegrationSetupActionSchema
+>;
 
 /**
  * Static, non-secret metadata used to render guided integration onboarding.
@@ -131,12 +138,18 @@ export const IntegrationPublicStatusSchema = z
   })
   .strict();
 
-export type IntegrationPublicStatus = z.infer<typeof IntegrationPublicStatusSchema>;
+export type IntegrationPublicStatus = z.infer<
+  typeof IntegrationPublicStatusSchema
+>;
 
 const descriptor = (value: IntegrationDescriptor): IntegrationDescriptor =>
   IntegrationDescriptorSchema.parse(value);
 
-const text = (en: string, cs: string, de: string): LocalizedText => ({ en, cs, de });
+const text = (en: string, cs: string, de: string): LocalizedText => ({
+  en,
+  cs,
+  de,
+});
 
 /** Public registry; it contains no keys, account identifiers, tokens, or secret references. */
 export const INTEGRATION_DESCRIPTORS = {
@@ -223,7 +236,11 @@ export const INTEGRATION_DESCRIPTORS = {
   "cloudflare-sync": descriptor({
     id: "cloudflare-sync",
     kind: "sync",
-    name: text("Cloud sync", "Cloudová synchronizace", "Cloud-Synchronisierung"),
+    name: text(
+      "Cloud sync",
+      "Cloudová synchronizace",
+      "Cloud-Synchronisierung",
+    ),
     description: text(
       "Optional encrypted synchronization of small user state between devices.",
       "Volitelná šifrovaná synchronizace malého uživatelského stavu mezi zařízeními.",

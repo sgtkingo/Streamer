@@ -1,52 +1,97 @@
-import { Brand } from './Brand';
+import { useEffect, useState } from "react";
+import type { StreamerApi } from "../api/client";
+import { Brand } from "./Brand";
+import { HomePage } from "./HomePage";
+import { LibraryPage } from "./LibraryPage";
 
-const shelves = [
-  { title: 'Continue watching', eyebrow: 'Back to your stories', tile: 'violet' },
-  { title: 'Trending now', eyebrow: 'Fresh from the world', tile: 'red' },
-  { title: 'Because you watched', eyebrow: 'Chosen for you', tile: 'blue' },
-  { title: 'New in cinemas', eyebrow: 'This season', tile: 'amber' }
-];
+type Route = "home" | "library";
 
-export function AppShell({ viewerName = 'Viewer' }: { viewerName?: string }) {
+function routeFromLocation(): Route {
+  return window.location.pathname.startsWith("/library") ? "library" : "home";
+}
+
+export function AppShell({
+  api,
+  viewerName = "Viewer",
+}: {
+  api: StreamerApi;
+  viewerName?: string;
+}) {
+  const [route, setRoute] = useState<Route>(routeFromLocation);
+  const [libraryVersion, setLibraryVersion] = useState(0);
+  const profileId = "default";
+
+  useEffect(() => {
+    const update = () => setRoute(routeFromLocation());
+    window.addEventListener("popstate", update);
+    return () => window.removeEventListener("popstate", update);
+  }, []);
+
+  const navigate = (next: Route) => {
+    window.history.pushState({}, "", next === "library" ? "/library" : "/");
+    setRoute(next);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <nav aria-label="Primary navigation" className="nav-links">
-          <a href="#home" aria-current="page">Home</a>
-          <a href="#movies">Movies</a>
-          <a href="#series">Series</a>
+        <button
+          className="brand-button"
+          type="button"
+          onClick={() => navigate("home")}
+          aria-label="StreamerAI home"
+        >
+          <Brand />
+        </button>
+        <nav aria-label="Primary navigation" className="primary-nav">
+          <button
+            type="button"
+            className={route === "home" ? "is-active" : ""}
+            onClick={() => navigate("home")}
+          >
+            Home
+          </button>
+          <button
+            type="button"
+            className={route === "library" ? "is-active" : ""}
+            onClick={() => navigate("library")}
+          >
+            Library
+          </button>
         </nav>
-        <Brand />
-        <div className="topbar-actions">
-          <label className="search-field">
-            <span className="sr-only">Search movies and series</span>
-            <input type="search" placeholder="Search" />
-          </label>
-          <button className="avatar" type="button" aria-label="Open profile menu">A</button>
-        </div>
+        {route === "home" && (
+          <nav aria-label="Home sections" className="section-nav">
+            <a href="#continue-watching">Continue</a>
+            <a href="#new-releases">New</a>
+            <a href="#trending">Trending</a>
+            <a href="#top-rated">Top Rated</a>
+            <a href="#for-you">For You</a>
+          </nav>
+        )}
+        <button
+          className="avatar"
+          type="button"
+          aria-label={`Open profile menu for ${viewerName}`}
+        >
+          {viewerName.slice(0, 1).toUpperCase()}
+        </button>
       </header>
 
-      <main id="home" className="library-home">
-        <section className="home-intro" aria-labelledby="home-heading">
-          <p className="eyebrow">Your library</p>
-          <h1 id="home-heading">Good evening, {viewerName}.</h1>
-          <p>Everything you love, quietly organised and ready to play.</p>
-        </section>
-
-        <section className="shelf-grid" aria-label="Your movie collections">
-          {shelves.map((shelf, index) => (
-            <article className="shelf-card" key={shelf.title}>
-              <div className={`fallback-art fallback-art--${shelf.tile}`} aria-hidden="true">
-                <span>{String(index + 1).padStart(2, '0')}</span>
-                <i />
-              </div>
-              <p className="eyebrow">{shelf.eyebrow}</p>
-              <h2>{shelf.title}</h2>
-              <p className="shelf-meta">Curated locally · Updated just now</p>
-            </article>
-          ))}
-        </section>
-      </main>
+      {route === "home" ? (
+        <HomePage
+          api={api}
+          profileId={profileId}
+          onLibraryChanged={() => setLibraryVersion((value) => value + 1)}
+        />
+      ) : (
+        <LibraryPage
+          api={api}
+          profileId={profileId}
+          version={libraryVersion}
+          onBackHome={() => navigate("home")}
+        />
+      )}
     </div>
   );
 }

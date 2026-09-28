@@ -1,9 +1,11 @@
 import type {
+  AvailabilityState,
+  CatalogTitle,
   IntegrationHealthState,
   IntegrationId,
   IntegrationSetupState,
   SupportedLocale,
-} from "@streamer/contracts";
+} from "@streamer-ai/contracts";
 
 export type Clock = () => Date;
 
@@ -40,7 +42,13 @@ export interface UpsertIntegrationConnectionInput {
   lastCheckedAt?: string | null;
 }
 
-export const JOB_STATES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
+export const JOB_STATES = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+] as const;
 export type JobState = (typeof JOB_STATES)[number];
 
 export interface Job<TPayload = unknown> {
@@ -104,4 +112,66 @@ export interface EnqueueSyncOperationInput<TPayload = unknown> {
   payload: TPayload;
   tombstone?: boolean;
   availableAt?: string;
+}
+
+export type CanonicalTitleData = Omit<
+  CatalogTitle,
+  "inLibrary" | "matchPercent" | "progressPercent"
+>;
+
+export interface CanonicalTitleRecord extends CanonicalTitleData {
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type UpsertCanonicalTitleInput = CanonicalTitleData;
+
+export interface ExternalEntityMappingInput {
+  titleId: string;
+  providerId: string;
+  externalId: string;
+  entityType: "movie" | "series" | "season" | "episode";
+  retrievedAt: string;
+}
+
+export interface LibraryEntryRecord {
+  profileId: string;
+  titleId: string;
+  membershipReason: "explicit" | "playback";
+  state: "saved" | "in-progress" | "completed";
+  progressPercent: number | null;
+  addedAt: string;
+  updatedAt: string;
+  lastPlayedAt: string | null;
+}
+
+export interface UpsertLibraryEntryInput {
+  profileId: string;
+  titleId: string;
+  membershipReason: "explicit" | "playback";
+  state?: "saved" | "in-progress" | "completed";
+  progressPercent?: number | null;
+  lastPlayedAt?: string | null;
+}
+
+export interface WatchHistoryRecord {
+  id: string;
+  profileId: string;
+  titleId: string;
+  eventType: "start" | "progress" | "stop" | "complete";
+  episodeLabel: string | null;
+  progressPercent: number;
+  occurredAt: string;
+}
+
+export interface AppendWatchHistoryInput extends Omit<
+  WatchHistoryRecord,
+  "occurredAt"
+> {
+  occurredAt?: string;
+}
+
+export interface AvailabilitySnapshot {
+  state: AvailabilityState;
+  checkedAt: string | null;
 }

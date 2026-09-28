@@ -1,6 +1,13 @@
-import type { ProfileDraft } from '../../api/client';
+import type { ProfileDraft } from "../../api/client";
 
-const preferences = ['Drama', 'Comedy', 'Sci-fi', 'Documentary', 'Thriller', 'Family'];
+const preferences = [
+  "Drama",
+  "Comedy",
+  "Sci-fi",
+  "Documentary",
+  "Thriller",
+  "Family",
+];
 
 interface ProfileStepProps {
   profile: ProfileDraft;
@@ -19,7 +26,10 @@ export function ProfileStep({ profile, onChange }: ProfileStepProps) {
     <div className="step-copy">
       <p className="eyebrow">Profile 1 of 5</p>
       <h1 tabIndex={-1}>Make it yours.</h1>
-      <p className="step-lead">A name is all we need. Preferences are optional and improve your first recommendations.</p>
+      <p className="step-lead">
+        A name is all we need. Preferences are optional and improve your first
+        recommendations.
+      </p>
 
       <div className="form-stack">
         <label className="field">
@@ -29,7 +39,9 @@ export function ProfileStep({ profile, onChange }: ProfileStepProps) {
             maxLength={40}
             placeholder="How should we call you?"
             value={profile.name}
-            onChange={(event) => onChange({ ...profile, name: event.target.value })}
+            onChange={(event) =>
+              onChange({ ...profile, name: event.target.value })
+            }
           />
         </label>
 
@@ -37,7 +49,12 @@ export function ProfileStep({ profile, onChange }: ProfileStepProps) {
           <span>Interface language</span>
           <select
             value={profile.locale}
-            onChange={(event) => onChange({ ...profile, locale: event.target.value as ProfileDraft['locale'] })}
+            onChange={(event) =>
+              onChange({
+                ...profile,
+                locale: event.target.value as ProfileDraft["locale"],
+              })
+            }
           >
             <option value="en">English</option>
             <option value="cs">Čeština</option>
@@ -47,7 +64,7 @@ export function ProfileStep({ profile, onChange }: ProfileStepProps) {
 
         <fieldset className="preference-fieldset">
           <legend>What do you enjoy?</legend>
-          <p>Select any, or let Streamer learn naturally.</p>
+          <p>Select any, or let StreamerAI learn naturally.</p>
           <div className="choice-grid">
             {preferences.map((preference) => (
               <label className="choice" key={preference}>

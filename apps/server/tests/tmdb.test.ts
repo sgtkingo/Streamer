@@ -8,11 +8,7 @@ import {
   TMDB_CONFIGURATION_URL,
   type FetchLike,
 } from "../src/index.js";
-import {
-  fetchReturning,
-  TEST_TOKEN,
-  tmdbConfiguration,
-} from "./fixtures.js";
+import { fetchReturning, TEST_TOKEN, tmdbConfiguration } from "./fixtures.js";
 
 describe("TMDB guided connection", () => {
   const apps: ReturnType<typeof createApp>[] = [];
@@ -51,15 +47,15 @@ describe("TMDB guided connection", () => {
     const result = await instance.inject({
       method: "POST",
       url: "/api/v1/integrations/tmdb/check",
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      payload: { token: TEST_TOKEN },
     });
 
     expect(result.statusCode).toBe(200);
     expect(result.json()).toMatchObject({
       integrationId: "tmdb",
+      ok: true,
       status: "verified",
-      saved: false,
-      persistence: "not_saved",
+      messageCode: "VERIFIED",
     });
     expect(observedUrl).toBe(TMDB_CONFIGURATION_URL);
     expect(observedAuthorization).toBe(`Bearer ${TEST_TOKEN}`);
@@ -75,7 +71,7 @@ describe("TMDB guided connection", () => {
     const result = await instance.inject({
       method: "POST",
       url: "/api/v1/integrations/tmdb/connect",
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      payload: { token: TEST_TOKEN },
     });
     const catalog = await instance.inject({
       method: "GET",
@@ -84,8 +80,9 @@ describe("TMDB guided connection", () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.json()).toMatchObject({
+      ok: true,
       status: "connected",
-      saved: true,
+      messageCode: "CONNECTED",
       persistence: "memory",
     });
     expect(await secretStore.has("integration.tmdb.read-token")).toBe(true);
@@ -106,14 +103,14 @@ describe("TMDB guided connection", () => {
     const result = await instance.inject({
       method: "POST",
       url: "/api/v1/integrations/tmdb/connect",
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      payload: { token: TEST_TOKEN },
     });
 
     expect(result.statusCode).toBe(401);
     expect(result.json()).toMatchObject({
-      status: "action_required",
-      saved: false,
-      diagnostic: { code: "TMDB_TOKEN_REJECTED", retryable: false },
+      ok: false,
+      status: "action-required",
+      messageCode: "CREDENTIAL_REJECTED",
     });
     expect(await secretStore.has("integration.tmdb.read-token")).toBe(false);
     expect(result.body).not.toContain(TEST_TOKEN);
@@ -146,8 +143,7 @@ describe("TMDB guided connection", () => {
       logger: createAppLogger({ destination }),
       fetch,
       secretStore,
-      integrationStateStore:
-        new NonPersistentMemoryIntegrationStateStore(),
+      integrationStateStore: new NonPersistentMemoryIntegrationStateStore(),
       tmdbTimeoutMs: 5,
     });
     apps.push(instance);
@@ -155,14 +151,14 @@ describe("TMDB guided connection", () => {
     const result = await instance.inject({
       method: "POST",
       url: "/api/v1/integrations/tmdb/connect",
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      payload: { token: TEST_TOKEN },
     });
 
     expect(result.statusCode).toBe(504);
     expect(result.json()).toMatchObject({
+      ok: false,
       status: "unavailable",
-      saved: false,
-      diagnostic: { code: "TMDB_TIMEOUT", retryable: true },
+      messageCode: "TIMEOUT",
     });
     expect(await secretStore.has("integration.tmdb.read-token")).toBe(false);
     expect(result.body).not.toContain(TEST_TOKEN);
@@ -170,17 +166,19 @@ describe("TMDB guided connection", () => {
   });
 
   it("rejects a successful-looking but malformed TMDB response", async () => {
-    const { instance, secretStore } = app(fetchReturning(200, { success: true }));
+    const { instance, secretStore } = app(
+      fetchReturning(200, { success: true }),
+    );
 
     const result = await instance.inject({
       method: "POST",
       url: "/api/v1/integrations/tmdb/connect",
-      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      payload: { token: TEST_TOKEN },
     });
 
     expect(result.statusCode).toBe(502);
     expect(result.json()).toMatchObject({
-      diagnostic: { code: "TMDB_INVALID_RESPONSE" },
+      messageCode: "INVALID_RESPONSE",
     });
     expect(await secretStore.has("integration.tmdb.read-token")).toBe(false);
   });

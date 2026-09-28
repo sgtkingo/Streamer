@@ -1,8 +1,8 @@
 {
-  "name": "streamer",
+  "name": "streamer-ai",
   "version": "0.1.0",
   "private": true,
-  "description": "A local-first, self-hosted film and series library with guided provider integrations.",
+  "description": "A local-first, conversational film and series discovery app with guided provider integrations.",
   "type": "module",
   "packageManager": "pnpm@10.17.1",
   "engines": {
@@ -10,7 +10,7 @@
     "pnpm": ">=10 <11"
   },
   "scripts": {
-    "dev": "pnpm --parallel --stream --filter @streamer/server --filter @streamer/web dev",
+    "dev": "pnpm --parallel --stream --filter @streamer-ai/server --filter @streamer-ai/web dev",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",

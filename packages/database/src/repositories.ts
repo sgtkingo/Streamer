@@ -1,5 +1,6 @@
 import {
   INTEGRATION_DESCRIPTORS,
+  CatalogTitleSchema,
   IntegrationHealthStateSchema,
   IntegrationIdSchema,
   IntegrationPublicStatusSchema,
@@ -8,21 +9,28 @@ import {
   type CredentialState,
   type IntegrationId,
   type IntegrationPublicStatus,
-} from "@streamer/contracts";
+} from "@streamer-ai/contracts";
 import type BetterSqlite3 from "better-sqlite3";
 
 import { DatabaseValidationError, ProfileLimitError } from "./errors.js";
 import type {
+  AppendWatchHistoryInput,
+  CanonicalTitleData,
+  CanonicalTitleRecord,
   ClaimJobInput,
   Clock,
   CreateProfileInput,
   EnqueueJobInput,
   EnqueueSyncOperationInput,
   Job,
+  LibraryEntryRecord,
   Profile,
   SyncOutboxOperation,
   UpdateProfileInput,
+  UpsertCanonicalTitleInput,
   UpsertIntegrationConnectionInput,
+  UpsertLibraryEntryInput,
+  WatchHistoryRecord,
 } from "./types.js";
 
 interface ProfileRow {
@@ -80,12 +88,52 @@ interface SyncOutboxRow {
   created_at: string;
 }
 
+interface CanonicalTitleRow {
+  id: string;
+  kind: string;
+  title: string;
+  normalized_json: string;
+  metadata_provider: string;
+  metadata_validated_at: string;
+  availability_state: string;
+  availability_checked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface LibraryEntryRow {
+  profile_id: string;
+  title_id: string;
+  membership_reason: string;
+  state: string;
+  progress_percent: number | null;
+  added_at: string;
+  updated_at: string;
+  last_played_at: string | null;
+}
+
+interface WatchHistoryRow {
+  id: string;
+  profile_id: string;
+  title_id: string;
+  event_type: string;
+  episode_label: string | null;
+  progress_percent: number;
+  occurred_at: string;
+}
+
 const isoNow = (clock: Clock): string => clock().toISOString();
 
-function assertShortString(value: string, label: string, maxLength: number): string {
+function assertShortString(
+  value: string,
+  label: string,
+  maxLength: number,
+): string {
   const normalized = value.trim();
   if (normalized.length === 0 || normalized.length > maxLength) {
-    throw new DatabaseValidationError(`${label} must contain between 1 and ${maxLength} characters.`);
+    throw new DatabaseValidationError(
+      `${label} must contain between 1 and ${maxLength} characters.`,
+    );
   }
   return normalized;
 }
@@ -106,8 +154,60 @@ function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
 
+function validateCanonicalTitle(
+  input: UpsertCanonicalTitleInput,
+): CanonicalTitleData {
+  const parsed = CatalogTitleSchema.parse({
+    ...input,
+    inLibrary: false,
+    matchPercent: null,
+    progressPercent: null,
+  });
+  const {
+    inLibrary: _inLibrary,
+    matchPercent: _matchPercent,
+    progressPercent: _progressPercent,
+    ...data
+  } = parsed;
+  return data;
+}
+
+function canonicalTitleFromRow(row: CanonicalTitleRow): CanonicalTitleRecord {
+  const data = validateCanonicalTitle(
+    parseJson<UpsertCanonicalTitleInput>(row.normalized_json),
+  );
+  return { ...data, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function libraryEntryFromRow(row: LibraryEntryRow): LibraryEntryRecord {
+  return {
+    profileId: row.profile_id,
+    titleId: row.title_id,
+    membershipReason:
+      row.membership_reason as LibraryEntryRecord["membershipReason"],
+    state: row.state as LibraryEntryRecord["state"],
+    progressPercent: row.progress_percent,
+    addedAt: row.added_at,
+    updatedAt: row.updated_at,
+    lastPlayedAt: row.last_played_at,
+  };
+}
+
+function watchHistoryFromRow(row: WatchHistoryRow): WatchHistoryRecord {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    titleId: row.title_id,
+    eventType: row.event_type as WatchHistoryRecord["eventType"],
+    episodeLabel: row.episode_label,
+    progressPercent: row.progress_percent,
+    occurredAt: row.occurred_at,
+  };
+}
+
 function assertIsoTimestamp(value: string, label: string): string {
-  const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+  const rfc3339 =
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
   if (!rfc3339.test(value) || !Number.isFinite(Date.parse(value))) {
     throw new DatabaseValidationError(`${label} must be an ISO timestamp.`);
   }
@@ -126,8 +226,12 @@ function profileFromRow(row: ProfileRow): Profile {
 }
 
 function credentialState(row: IntegrationConnectionRow): CredentialState {
-  const descriptor = INTEGRATION_DESCRIPTORS[IntegrationIdSchema.parse(row.integration_id)];
-  if (descriptor.setupMode === "local-runtime" || descriptor.setupMode === "informed-consent") {
+  const descriptor =
+    INTEGRATION_DESCRIPTORS[IntegrationIdSchema.parse(row.integration_id)];
+  if (
+    descriptor.setupMode === "local-runtime" ||
+    descriptor.setupMode === "informed-consent"
+  ) {
     return "not-required";
   }
   return row.secret_ref === null ? "missing" : "stored";
@@ -138,7 +242,9 @@ function credentialState(row: IntegrationConnectionRow): CredentialState {
  * representation. It constructs a fresh object and validates strict output, so
  * future columns cannot leak through object spreading.
  */
-export function toPublicIntegrationConnection(row: IntegrationConnectionRow): IntegrationPublicStatus {
+export function toPublicIntegrationConnection(
+  row: IntegrationConnectionRow,
+): IntegrationPublicStatus {
   return IntegrationPublicStatusSchema.parse({
     id: row.integration_id,
     enabled: row.enabled === 1,
@@ -170,7 +276,9 @@ function jobFromRow<TPayload>(row: JobRow): Job<TPayload> {
   };
 }
 
-function syncOperationFromRow<TPayload>(row: SyncOutboxRow): SyncOutboxOperation<TPayload> {
+function syncOperationFromRow<TPayload>(
+  row: SyncOutboxRow,
+): SyncOutboxOperation<TPayload> {
   return {
     opId: row.op_id,
     deviceId: row.device_id,
@@ -198,24 +306,32 @@ export class SettingsRepository {
   get<T>(key: string): T | null {
     const row = this.database
       .prepare("SELECT value_json FROM app_settings WHERE key = ?")
-      .get(assertShortString(key, "Setting key", 120)) as { value_json: string } | undefined;
+      .get(assertShortString(key, "Setting key", 120)) as
+      { value_json: string } | undefined;
     return row === undefined ? null : parseJson<T>(row.value_json);
   }
 
   set(key: string, value: unknown): void {
     this.database
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO app_settings (key, value_json, updated_at)
         VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
-      `)
-      .run(assertShortString(key, "Setting key", 120), stringifyJson(value, "Setting value"), isoNow(this.clock));
+      `,
+      )
+      .run(
+        assertShortString(key, "Setting key", 120),
+        stringifyJson(value, "Setting value"),
+        isoNow(this.clock),
+      );
   }
 
   delete(key: string): boolean {
     return (
-      this.database.prepare("DELETE FROM app_settings WHERE key = ?").run(assertShortString(key, "Setting key", 120))
-        .changes > 0
+      this.database
+        .prepare("DELETE FROM app_settings WHERE key = ?")
+        .run(assertShortString(key, "Setting key", 120)).changes > 0
     );
   }
 }
@@ -230,10 +346,12 @@ export class ProfilesRepository {
     const now = isoNow(this.clock);
     try {
       this.database
-        .prepare(`
+        .prepare(
+          `
           INSERT INTO profiles (id, name, locale, preferences_json, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?)
-        `)
+        `,
+        )
         .run(
           assertShortString(input.id, "Profile id", 120),
           assertShortString(input.name, "Profile name", 80),
@@ -243,7 +361,10 @@ export class ProfilesRepository {
           now,
         );
     } catch (error) {
-      if (error instanceof Error && error.message.includes("PROFILE_LIMIT_REACHED")) {
+      if (
+        error instanceof Error &&
+        error.message.includes("PROFILE_LIMIT_REACHED")
+      ) {
         throw new ProfileLimitError();
       }
       throw error;
@@ -267,27 +388,42 @@ export class ProfilesRepository {
   }
 
   list(): Profile[] {
-    return (this.database.prepare("SELECT * FROM profiles ORDER BY created_at, id").all() as ProfileRow[]).map(
-      profileFromRow,
-    );
+    return (
+      this.database
+        .prepare("SELECT * FROM profiles ORDER BY created_at, id")
+        .all() as ProfileRow[]
+    ).map(profileFromRow);
   }
 
   count(): number {
-    return (this.database.prepare("SELECT count(*) AS count FROM profiles").get() as { count: number }).count;
+    return (
+      this.database.prepare("SELECT count(*) AS count FROM profiles").get() as {
+        count: number;
+      }
+    ).count;
   }
 
   update(id: string, patch: UpdateProfileInput): Profile {
     const current = this.getRequired(id);
     this.database
-      .prepare(`
+      .prepare(
+        `
         UPDATE profiles
         SET name = ?, locale = ?, preferences_json = ?, updated_at = ?
         WHERE id = ?
-      `)
+      `,
+      )
       .run(
-        patch.name === undefined ? current.name : assertShortString(patch.name, "Profile name", 80),
-        patch.locale === undefined ? current.locale : SupportedLocaleSchema.parse(patch.locale),
-        stringifyJson(patch.preferences ?? current.preferences, "Profile preferences"),
+        patch.name === undefined
+          ? current.name
+          : assertShortString(patch.name, "Profile name", 80),
+        patch.locale === undefined
+          ? current.locale
+          : SupportedLocaleSchema.parse(patch.locale),
+        stringifyJson(
+          patch.preferences ?? current.preferences,
+          "Profile preferences",
+        ),
         isoNow(this.clock),
         current.id,
       );
@@ -296,8 +432,313 @@ export class ProfilesRepository {
 
   delete(id: string): boolean {
     return (
-      this.database.prepare("DELETE FROM profiles WHERE id = ?").run(assertShortString(id, "Profile id", 120)).changes > 0
+      this.database
+        .prepare("DELETE FROM profiles WHERE id = ?")
+        .run(assertShortString(id, "Profile id", 120)).changes > 0
     );
+  }
+}
+
+export class CatalogTitlesRepository {
+  constructor(
+    private readonly database: BetterSqlite3.Database,
+    private readonly clock: Clock,
+  ) {}
+
+  upsert(input: UpsertCanonicalTitleInput): CanonicalTitleRecord {
+    const data = validateCanonicalTitle(input);
+    const existing = this.get(data.id);
+    const now = isoNow(this.clock);
+    this.database
+      .prepare(
+        `
+        INSERT INTO canonical_titles (
+          id, kind, title, normalized_json, metadata_provider, metadata_validated_at,
+          availability_state, availability_checked_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          kind = excluded.kind,
+          title = excluded.title,
+          normalized_json = excluded.normalized_json,
+          metadata_provider = excluded.metadata_provider,
+          metadata_validated_at = excluded.metadata_validated_at,
+          availability_state = excluded.availability_state,
+          availability_checked_at = excluded.availability_checked_at,
+          updated_at = excluded.updated_at
+      `,
+      )
+      .run(
+        data.id,
+        data.kind,
+        data.title,
+        stringifyJson(data, "Canonical title"),
+        data.metadataProvider,
+        assertIsoTimestamp(data.metadataValidatedAt, "Metadata validated at"),
+        data.availability,
+        data.availabilityCheckedAt,
+        existing?.createdAt ?? now,
+        now,
+      );
+    return this.getRequired(data.id);
+  }
+
+  get(id: string): CanonicalTitleRecord | null {
+    const row = this.database
+      .prepare("SELECT * FROM canonical_titles WHERE id = ?")
+      .get(assertShortString(id, "Canonical title id", 160)) as
+      CanonicalTitleRow | undefined;
+    return row === undefined ? null : canonicalTitleFromRow(row);
+  }
+
+  list(ids?: readonly string[]): CanonicalTitleRecord[] {
+    if (ids === undefined) {
+      return (
+        this.database
+          .prepare(
+            "SELECT * FROM canonical_titles ORDER BY updated_at DESC, id",
+          )
+          .all() as CanonicalTitleRow[]
+      ).map(canonicalTitleFromRow);
+    }
+    if (ids.length === 0) return [];
+    const safeIds = ids.map((id) =>
+      assertShortString(id, "Canonical title id", 160),
+    );
+    const placeholders = safeIds.map(() => "?").join(", ");
+    return (
+      this.database
+        .prepare(`SELECT * FROM canonical_titles WHERE id IN (${placeholders})`)
+        .all(...safeIds) as CanonicalTitleRow[]
+    ).map(canonicalTitleFromRow);
+  }
+
+  mapExternalEntity(input: {
+    titleId: string;
+    providerId: string;
+    externalId: string;
+    entityType: "movie" | "series" | "season" | "episode";
+    retrievedAt: string;
+  }): void {
+    this.getRequired(input.titleId);
+    this.database
+      .prepare(
+        `
+        INSERT INTO external_entity_mappings (title_id, provider_id, external_id, entity_type, retrieved_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(provider_id, external_id, entity_type) DO UPDATE SET
+          title_id = excluded.title_id,
+          retrieved_at = excluded.retrieved_at
+      `,
+      )
+      .run(
+        input.titleId,
+        assertShortString(input.providerId, "Provider id", 80),
+        assertShortString(input.externalId, "External id", 160),
+        input.entityType,
+        assertIsoTimestamp(input.retrievedAt, "Retrieved at"),
+      );
+  }
+
+  private getRequired(id: string): CanonicalTitleRecord {
+    const title = this.get(id);
+    if (title === null)
+      throw new DatabaseValidationError(
+        `Canonical title '${id}' does not exist.`,
+      );
+    return title;
+  }
+}
+
+export class LibraryRepository {
+  constructor(
+    private readonly database: BetterSqlite3.Database,
+    private readonly clock: Clock,
+  ) {}
+
+  upsert(input: UpsertLibraryEntryInput): LibraryEntryRecord {
+    const profileId = assertShortString(input.profileId, "Profile id", 120);
+    const titleId = assertShortString(input.titleId, "Canonical title id", 160);
+    const existing = this.get(profileId, titleId);
+    const now = isoNow(this.clock);
+    const state =
+      input.state ??
+      (input.membershipReason === "playback" ? "in-progress" : "saved");
+    const progressPercent =
+      input.progressPercent ?? existing?.progressPercent ?? null;
+    if (
+      progressPercent !== null &&
+      (progressPercent < 0 || progressPercent > 100)
+    ) {
+      throw new DatabaseValidationError(
+        "Library progress must be between 0 and 100.",
+      );
+    }
+    const lastPlayedAt =
+      input.lastPlayedAt === undefined
+        ? (existing?.lastPlayedAt ?? null)
+        : input.lastPlayedAt;
+    if (lastPlayedAt !== null)
+      assertIsoTimestamp(lastPlayedAt, "Last played at");
+
+    this.database
+      .prepare(
+        `
+        INSERT INTO library_entries (
+          profile_id, title_id, membership_reason, state, progress_percent, added_at, updated_at, last_played_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(profile_id, title_id) DO UPDATE SET
+          membership_reason = excluded.membership_reason,
+          state = excluded.state,
+          progress_percent = excluded.progress_percent,
+          updated_at = excluded.updated_at,
+          last_played_at = excluded.last_played_at
+      `,
+      )
+      .run(
+        profileId,
+        titleId,
+        input.membershipReason,
+        state,
+        progressPercent,
+        existing?.addedAt ?? now,
+        now,
+        lastPlayedAt,
+      );
+    return this.getRequired(profileId, titleId);
+  }
+
+  get(profileId: string, titleId: string): LibraryEntryRecord | null {
+    const row = this.database
+      .prepare(
+        "SELECT * FROM library_entries WHERE profile_id = ? AND title_id = ?",
+      )
+      .get(
+        assertShortString(profileId, "Profile id", 120),
+        assertShortString(titleId, "Canonical title id", 160),
+      ) as LibraryEntryRow | undefined;
+    return row === undefined ? null : libraryEntryFromRow(row);
+  }
+
+  list(profileId: string): LibraryEntryRecord[] {
+    return (
+      this.database
+        .prepare(
+          "SELECT * FROM library_entries WHERE profile_id = ? ORDER BY updated_at DESC, title_id",
+        )
+        .all(
+          assertShortString(profileId, "Profile id", 120),
+        ) as LibraryEntryRow[]
+    ).map(libraryEntryFromRow);
+  }
+
+  remove(profileId: string, titleId: string): boolean {
+    return (
+      this.database
+        .prepare(
+          "DELETE FROM library_entries WHERE profile_id = ? AND title_id = ?",
+        )
+        .run(
+          assertShortString(profileId, "Profile id", 120),
+          assertShortString(titleId, "Canonical title id", 160),
+        ).changes > 0
+    );
+  }
+
+  private getRequired(profileId: string, titleId: string): LibraryEntryRecord {
+    const entry = this.get(profileId, titleId);
+    if (entry === null)
+      throw new DatabaseValidationError(
+        `Library entry '${profileId}/${titleId}' does not exist.`,
+      );
+    return entry;
+  }
+}
+
+export class HistoryRepository {
+  constructor(
+    private readonly database: BetterSqlite3.Database,
+    private readonly clock: Clock,
+  ) {}
+
+  append(input: AppendWatchHistoryInput): WatchHistoryRecord {
+    if (input.progressPercent < 0 || input.progressPercent > 100) {
+      throw new DatabaseValidationError(
+        "History progress must be between 0 and 100.",
+      );
+    }
+    const occurredAt =
+      input.occurredAt === undefined
+        ? isoNow(this.clock)
+        : assertIsoTimestamp(input.occurredAt, "Occurred at");
+    this.database
+      .prepare(
+        `
+        INSERT INTO watch_history_events (
+          id, profile_id, title_id, event_type, episode_label, progress_percent, occurred_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(
+        assertShortString(input.id, "History event id", 120),
+        assertShortString(input.profileId, "Profile id", 120),
+        assertShortString(input.titleId, "Canonical title id", 160),
+        input.eventType,
+        input.episodeLabel === null
+          ? null
+          : assertShortString(input.episodeLabel, "Episode label", 120),
+        input.progressPercent,
+        occurredAt,
+      );
+    return this.getRequired(input.id);
+  }
+
+  list(profileId: string, limit = 100): WatchHistoryRecord[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+      throw new DatabaseValidationError(
+        "History limit must be between 1 and 1000.",
+      );
+    }
+    return (
+      this.database
+        .prepare(
+          "SELECT * FROM watch_history_events WHERE profile_id = ? ORDER BY occurred_at DESC, id DESC LIMIT ?",
+        )
+        .all(
+          assertShortString(profileId, "Profile id", 120),
+          limit,
+        ) as WatchHistoryRow[]
+    ).map(watchHistoryFromRow);
+  }
+
+  remove(profileId: string, eventId: string): boolean {
+    return (
+      this.database
+        .prepare(
+          "DELETE FROM watch_history_events WHERE profile_id = ? AND id = ?",
+        )
+        .run(
+          assertShortString(profileId, "Profile id", 120),
+          assertShortString(eventId, "History event id", 120),
+        ).changes > 0
+    );
+  }
+
+  clear(profileId: string): number {
+    return this.database
+      .prepare("DELETE FROM watch_history_events WHERE profile_id = ?")
+      .run(assertShortString(profileId, "Profile id", 120)).changes;
+  }
+
+  private getRequired(id: string): WatchHistoryRecord {
+    const row = this.database
+      .prepare("SELECT * FROM watch_history_events WHERE id = ?")
+      .get(assertShortString(id, "History event id", 120)) as
+      WatchHistoryRow | undefined;
+    if (row === undefined)
+      throw new DatabaseValidationError(
+        `History event '${id}' does not exist.`,
+      );
+    return watchHistoryFromRow(row);
   }
 }
 
@@ -314,28 +755,43 @@ export class IntegrationsRepository {
 
   list(): IntegrationPublicStatus[] {
     return (
-      this.database.prepare("SELECT * FROM integration_connections ORDER BY integration_id").all() as IntegrationConnectionRow[]
+      this.database
+        .prepare(
+          "SELECT * FROM integration_connections ORDER BY integration_id",
+        )
+        .all() as IntegrationConnectionRow[]
     ).map(toPublicIntegrationConnection);
   }
 
   upsert(input: UpsertIntegrationConnectionInput): IntegrationPublicStatus {
     const id = IntegrationIdSchema.parse(input.id);
     const existing = this.getStored(id);
-    const hasSecretRef = Object.prototype.hasOwnProperty.call(input, "secretRef");
-    const secretRef = hasSecretRef ? this.validateSecretRef(input.secretRef ?? null) : (existing?.secret_ref ?? null);
-    const healthCode = input.healthCode === undefined ? (existing?.health_code ?? null) : input.healthCode;
+    const hasSecretRef = Object.prototype.hasOwnProperty.call(
+      input,
+      "secretRef",
+    );
+    const secretRef = hasSecretRef
+      ? this.validateSecretRef(input.secretRef ?? null)
+      : (existing?.secret_ref ?? null);
+    const healthCode =
+      input.healthCode === undefined
+        ? (existing?.health_code ?? null)
+        : input.healthCode;
     if (healthCode !== null) {
       assertShortString(healthCode, "Health code", 80);
     }
     const lastCheckedAt =
-      input.lastCheckedAt === undefined ? (existing?.last_checked_at ?? null) : input.lastCheckedAt;
+      input.lastCheckedAt === undefined
+        ? (existing?.last_checked_at ?? null)
+        : input.lastCheckedAt;
     if (lastCheckedAt !== null) {
       assertIsoTimestamp(lastCheckedAt, "Last checked at");
     }
     const now = isoNow(this.clock);
 
     this.database
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO integration_connections (
           integration_id, enabled, setup_status, health_status, secret_ref, health_code,
           last_checked_at, created_at, updated_at
@@ -348,7 +804,8 @@ export class IntegrationsRepository {
           health_code = excluded.health_code,
           last_checked_at = excluded.last_checked_at,
           updated_at = excluded.updated_at
-      `)
+      `,
+      )
       .run(
         id,
         input.enabled ? 1 : 0,
@@ -375,15 +832,19 @@ export class IntegrationsRepository {
 
   clearSecretRef(id: IntegrationId): void {
     this.database
-      .prepare("UPDATE integration_connections SET secret_ref = NULL, updated_at = ? WHERE integration_id = ?")
+      .prepare(
+        "UPDATE integration_connections SET secret_ref = NULL, updated_at = ? WHERE integration_id = ?",
+      )
       .run(isoNow(this.clock), IntegrationIdSchema.parse(id));
   }
 
   private getStored(id: IntegrationId): IntegrationConnectionRow | null {
     return (
-      (this.database.prepare("SELECT * FROM integration_connections WHERE integration_id = ?").get(id) as
-        | IntegrationConnectionRow
-        | undefined) ?? null
+      (this.database
+        .prepare(
+          "SELECT * FROM integration_connections WHERE integration_id = ?",
+        )
+        .get(id) as IntegrationConnectionRow | undefined) ?? null
     );
   }
 
@@ -393,7 +854,9 @@ export class IntegrationsRepository {
     }
     const normalized = assertShortString(value, "Secret reference", 512);
     if (!/^[a-z][a-z0-9+.-]*:\/\/[^\s]+$/i.test(normalized)) {
-      throw new DatabaseValidationError("Secret reference must be an opaque URI, not a credential value.");
+      throw new DatabaseValidationError(
+        "Secret reference must be an opaque URI, not a credential value.",
+      );
     }
     return normalized;
   }
@@ -407,14 +870,19 @@ export class JobsRepository {
 
   enqueue<TPayload>(input: EnqueueJobInput<TPayload>): Job<TPayload> {
     const now = isoNow(this.clock);
-    const availableAt = input.availableAt === undefined ? now : assertIsoTimestamp(input.availableAt, "Available at");
+    const availableAt =
+      input.availableAt === undefined
+        ? now
+        : assertIsoTimestamp(input.availableAt, "Available at");
     this.database
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO jobs (
           id, kind, payload_json, state, priority, attempts, max_attempts, available_at,
           unique_key, created_at, updated_at
         ) VALUES (?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?, ?)
-      `)
+      `,
+      )
       .run(
         assertShortString(input.id, "Job id", 120),
         assertShortString(input.kind, "Job kind", 120),
@@ -441,14 +909,20 @@ export class JobsRepository {
     if (!Number.isInteger(input.leaseMs) || input.leaseMs < 1_000) {
       throw new DatabaseValidationError("Job lease must be at least 1000ms.");
     }
-    const kinds = input.kinds?.map((kind) => assertShortString(kind, "Job kind", 120)) ?? [];
+    const kinds =
+      input.kinds?.map((kind) => assertShortString(kind, "Job kind", 120)) ??
+      [];
 
     return this.database.transaction(() => {
       const nowDate = this.clock();
       const now = nowDate.toISOString();
-      const kindClause = kinds.length === 0 ? "" : ` AND kind IN (${kinds.map(() => "?").join(", ")})`;
+      const kindClause =
+        kinds.length === 0
+          ? ""
+          : ` AND kind IN (${kinds.map(() => "?").join(", ")})`;
       const row = this.database
-        .prepare(`
+        .prepare(
+          `
           SELECT * FROM jobs
           WHERE attempts < max_attempts
             AND (
@@ -458,18 +932,23 @@ export class JobsRepository {
             ${kindClause}
           ORDER BY priority DESC, created_at, id
           LIMIT 1
-        `)
+        `,
+        )
         .get(now, now, ...kinds) as JobRow | undefined;
       if (row === undefined) {
         return null;
       }
-      const leaseExpiresAt = new Date(nowDate.getTime() + input.leaseMs).toISOString();
+      const leaseExpiresAt = new Date(
+        nowDate.getTime() + input.leaseMs,
+      ).toISOString();
       this.database
-        .prepare(`
+        .prepare(
+          `
           UPDATE jobs
           SET state = 'running', attempts = attempts + 1, lease_owner = ?, lease_expires_at = ?, updated_at = ?
           WHERE id = ?
-        `)
+        `,
+        )
         .run(workerId, leaseExpiresAt, now, row.id);
       return this.getRequired<TPayload>(row.id);
     })();
@@ -479,28 +958,42 @@ export class JobsRepository {
     const now = isoNow(this.clock);
     return (
       this.database
-        .prepare(`
+        .prepare(
+          `
           UPDATE jobs
           SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
           WHERE id = ? AND state = 'running' AND lease_owner = ?
-        `)
-        .run(now, assertShortString(id, "Job id", 120), assertShortString(workerId, "Worker id", 120)).changes > 0
+        `,
+        )
+        .run(
+          now,
+          assertShortString(id, "Job id", 120),
+          assertShortString(workerId, "Worker id", 120),
+        ).changes > 0
     );
   }
 
-  fail(id: string, workerId: string, errorCode: string, retryAt?: string): boolean {
+  fail(
+    id: string,
+    workerId: string,
+    errorCode: string,
+    retryAt?: string,
+  ): boolean {
     const job = this.getRequired(id);
     const now = isoNow(this.clock);
-    const retry = retryAt === undefined ? now : assertIsoTimestamp(retryAt, "Retry at");
+    const retry =
+      retryAt === undefined ? now : assertIsoTimestamp(retryAt, "Retry at");
     const nextState = job.attempts >= job.maxAttempts ? "failed" : "queued";
     return (
       this.database
-        .prepare(`
+        .prepare(
+          `
           UPDATE jobs
           SET state = ?, available_at = ?, lease_owner = NULL, lease_expires_at = NULL,
               last_error = ?, updated_at = ?
           WHERE id = ? AND state = 'running' AND lease_owner = ?
-        `)
+        `,
+        )
         .run(
           nextState,
           retry,
@@ -527,18 +1020,24 @@ export class SyncOutboxRepository {
     private readonly clock: Clock,
   ) {}
 
-  enqueue<TPayload>(input: EnqueueSyncOperationInput<TPayload>): SyncOutboxOperation<TPayload> {
+  enqueue<TPayload>(
+    input: EnqueueSyncOperationInput<TPayload>,
+  ): SyncOutboxOperation<TPayload> {
     if (!Number.isInteger(input.schemaVersion) || input.schemaVersion < 1) {
-      throw new DatabaseValidationError("Sync schema version must be a positive integer.");
+      throw new DatabaseValidationError(
+        "Sync schema version must be a positive integer.",
+      );
     }
     const now = isoNow(this.clock);
     this.database
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO sync_outbox (
           op_id, device_id, profile_id, entity_type, entity_id, schema_version, hlc,
           payload_json, tombstone, attempts, available_at, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-      `)
+      `,
+      )
       .run(
         assertShortString(input.opId, "Operation id", 120),
         assertShortString(input.deviceId, "Device id", 120),
@@ -551,23 +1050,31 @@ export class SyncOutboxRepository {
         assertShortString(input.hlc, "Hybrid logical timestamp", 120),
         stringifyJson(input.payload, "Sync payload"),
         input.tombstone === true ? 1 : 0,
-        input.availableAt === undefined ? now : assertIsoTimestamp(input.availableAt, "Available at"),
+        input.availableAt === undefined
+          ? now
+          : assertIsoTimestamp(input.availableAt, "Available at"),
         now,
       );
     return this.getRequired<TPayload>(input.opId);
   }
 
-  listPending<TPayload = unknown>(limit = 100): SyncOutboxOperation<TPayload>[] {
+  listPending<TPayload = unknown>(
+    limit = 100,
+  ): SyncOutboxOperation<TPayload>[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
-      throw new DatabaseValidationError("Outbox batch limit must be between 1 and 1000.");
+      throw new DatabaseValidationError(
+        "Outbox batch limit must be between 1 and 1000.",
+      );
     }
     const rows = this.database
-      .prepare(`
+      .prepare(
+        `
         SELECT * FROM sync_outbox
         WHERE delivered_at IS NULL AND available_at <= ?
         ORDER BY created_at, op_id
         LIMIT ?
-      `)
+      `,
+      )
       .all(isoNow(this.clock), limit) as SyncOutboxRow[];
     return rows.map(syncOperationFromRow<TPayload>);
   }
@@ -579,18 +1086,22 @@ export class SyncOutboxRepository {
     const ids = opIds.map((id) => assertShortString(id, "Operation id", 120));
     const placeholders = ids.map(() => "?").join(", ");
     return this.database
-      .prepare(`UPDATE sync_outbox SET delivered_at = ?, last_error = NULL WHERE op_id IN (${placeholders})`)
+      .prepare(
+        `UPDATE sync_outbox SET delivered_at = ?, last_error = NULL WHERE op_id IN (${placeholders})`,
+      )
       .run(isoNow(this.clock), ...ids).changes;
   }
 
   markFailed(opId: string, errorCode: string, retryAt: string): boolean {
     return (
       this.database
-        .prepare(`
+        .prepare(
+          `
           UPDATE sync_outbox
           SET attempts = attempts + 1, last_error = ?, available_at = ?
           WHERE op_id = ? AND delivered_at IS NULL
-        `)
+        `,
+        )
         .run(
           assertShortString(errorCode, "Sync error code", 240),
           assertIsoTimestamp(retryAt, "Retry at"),
@@ -601,16 +1112,21 @@ export class SyncOutboxRepository {
 
   pruneDelivered(before: string): number {
     return this.database
-      .prepare("DELETE FROM sync_outbox WHERE delivered_at IS NOT NULL AND delivered_at < ?")
+      .prepare(
+        "DELETE FROM sync_outbox WHERE delivered_at IS NOT NULL AND delivered_at < ?",
+      )
       .run(assertIsoTimestamp(before, "Prune before")).changes;
   }
 
   private getRequired<TPayload>(opId: string): SyncOutboxOperation<TPayload> {
     const row = this.database
       .prepare("SELECT * FROM sync_outbox WHERE op_id = ?")
-      .get(assertShortString(opId, "Operation id", 120)) as SyncOutboxRow | undefined;
+      .get(assertShortString(opId, "Operation id", 120)) as
+      SyncOutboxRow | undefined;
     if (row === undefined) {
-      throw new DatabaseValidationError(`Sync operation '${opId}' does not exist.`);
+      throw new DatabaseValidationError(
+        `Sync operation '${opId}' does not exist.`,
+      );
     }
     return syncOperationFromRow<TPayload>(row);
   }

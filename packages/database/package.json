@@ -1,5 +1,5 @@
 {
-  "name": "@streamer/database",
+  "name": "@streamer-ai/database",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@streamer/contracts": "workspace:*",
+    "@streamer-ai/contracts": "workspace:*",
     "better-sqlite3": "^12.4.1"
   },
   "devDependencies": {

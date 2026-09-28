@@ -1,10 +1,7 @@
 import type { StorePersistence } from "./secret-store.js";
 
 export type IntegrationConnectionStatus =
-  | "not_configured"
-  | "connected"
-  | "action_required"
-  | "unavailable";
+  "not_configured" | "connected" | "action_required" | "unavailable";
 
 export interface IntegrationState {
   integrationId: string;
@@ -30,9 +27,7 @@ export interface IntegrationStateStore {
  * Development/test-only integration state. It is deliberately named and
  * reported as non-persistent so setup screens cannot imply durable storage.
  */
-export class NonPersistentMemoryIntegrationStateStore
-  implements IntegrationStateStore
-{
+export class NonPersistentMemoryIntegrationStateStore implements IntegrationStateStore {
   readonly persistence = "memory" as const;
   readonly isPersistent = false;
   readonly #states = new Map<string, IntegrationState>();

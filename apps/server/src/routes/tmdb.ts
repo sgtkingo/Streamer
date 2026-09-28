@@ -16,29 +16,14 @@ export interface TmdbRouteDependencies {
   now: () => Date;
 }
 
-const authorizationHeadersSchema = {
+const tokenBodySchema = {
   type: "object",
-  required: ["authorization"],
+  required: ["token"],
+  additionalProperties: false,
   properties: {
-    authorization: { type: "string", minLength: 8, maxLength: 4096 },
+    token: { type: "string", minLength: 20, maxLength: 2048 },
   },
 } as const;
-
-function readBearerToken(authorization: string | undefined): string | undefined {
-  if (authorization === undefined) {
-    return undefined;
-  }
-
-  const match = /^Bearer ([^\s]+)$/i.exec(authorization);
-  if (match === null) {
-    return undefined;
-  }
-
-  const token = match[1];
-  return token !== undefined && token.length >= 20 && token.length <= 2048
-    ? token
-    : undefined;
-}
 
 function sendCheckFailure(reply: FastifyReply, result: TmdbConnectionCheck) {
   if (result.ok) {
@@ -48,69 +33,56 @@ function sendCheckFailure(reply: FastifyReply, result: TmdbConnectionCheck) {
   if (result.kind === "unauthorized" || result.kind === "forbidden") {
     return reply.code(401).send({
       integrationId: "tmdb",
-      status: "action_required",
-      saved: false,
-      diagnostic: {
-        code: "TMDB_TOKEN_REJECTED",
-        message:
-          "TMDB rejected this token. Copy the API Read Access Token from your TMDB API settings and try again.",
-        retryable: false,
-      },
-      checkedAt: result.checkedAt,
+      ok: false,
+      status: "action-required",
+      messageCode: "CREDENTIAL_REJECTED",
     });
   }
 
   if (result.kind === "timeout") {
     return reply.code(504).send({
       integrationId: "tmdb",
+      ok: false,
       status: "unavailable",
-      saved: false,
-      diagnostic: {
-        code: "TMDB_TIMEOUT",
-        message:
-          "TMDB did not respond in time. Your token was not saved; check the connection and try again.",
-        retryable: true,
-      },
-      checkedAt: result.checkedAt,
+      messageCode: "TIMEOUT",
     });
   }
 
-  const code =
+  const messageCode =
     result.kind === "rate_limited"
-      ? "TMDB_RATE_LIMITED"
+      ? "RATE_LIMITED"
       : result.kind === "invalid_response"
-        ? "TMDB_INVALID_RESPONSE"
-        : "TMDB_UNAVAILABLE";
-  const message =
-    result.kind === "rate_limited"
-      ? "TMDB is temporarily limiting requests. Wait a moment and try again."
-      : "TMDB could not be verified right now. Your token was not saved; try again later.";
+        ? "INVALID_RESPONSE"
+        : "PROVIDER_UNAVAILABLE";
 
   return reply.code(502).send({
     integrationId: "tmdb",
+    ok: false,
     status: "unavailable",
-    saved: false,
-    diagnostic: { code, message, retryable: true },
-    checkedAt: result.checkedAt,
+    messageCode,
   });
 }
 
 async function verify(
-  authorization: string | undefined,
+  token: string | undefined,
   dependencies: TmdbRouteDependencies,
 ) {
-  const token = readBearerToken(authorization);
-  if (token === undefined) {
+  const cleanToken = token?.trim().replace(/^Bearer\s+/i, "");
+  if (
+    cleanToken === undefined ||
+    cleanToken.length < 20 ||
+    cleanToken.length > 2_048
+  ) {
     return { token: undefined, result: undefined } as const;
   }
 
   const result = await checkTmdbConnection({
-    token,
+    token: cleanToken,
     fetch: dependencies.fetch,
     timeoutMs: dependencies.timeoutMs,
     now: dependencies.now,
   });
-  return { token, result } as const;
+  return { token: cleanToken, result } as const;
 }
 
 export function registerTmdbRoutes(
@@ -119,23 +91,21 @@ export function registerTmdbRoutes(
 ): void {
   app.post(
     "/api/v1/integrations/tmdb/check",
-    { schema: { headers: authorizationHeadersSchema } },
+    { schema: { body: tokenBodySchema } },
     async (request, reply) => {
       const verification = await verify(
-        request.headers.authorization,
+        (request.body as { token?: string } | undefined)?.token,
         dependencies,
       );
-      if (verification.token === undefined || verification.result === undefined) {
+      if (
+        verification.token === undefined ||
+        verification.result === undefined
+      ) {
         return reply.code(400).send({
           integrationId: "tmdb",
-          status: "action_required",
-          saved: false,
-          diagnostic: {
-            code: "TMDB_TOKEN_REQUIRED",
-            message:
-              "Paste a valid TMDB API Read Access Token and try again.",
-            retryable: false,
-          },
+          ok: false,
+          status: "action-required",
+          messageCode: "CREDENTIAL_REQUIRED",
         });
       }
       if (!verification.result.ok) {
@@ -148,35 +118,30 @@ export function registerTmdbRoutes(
 
       return reply.send({
         integrationId: "tmdb",
+        ok: true,
         status: "verified",
-        saved: false,
-        persistence: "not_saved",
-        message:
-          "TMDB accepted the token. Continue to connect it and enable metadata.",
-        checkedAt: verification.result.checkedAt,
+        messageCode: "VERIFIED",
       });
     },
   );
 
   app.post(
     "/api/v1/integrations/tmdb/connect",
-    { schema: { headers: authorizationHeadersSchema } },
+    { schema: { body: tokenBodySchema } },
     async (request, reply) => {
       const verification = await verify(
-        request.headers.authorization,
+        (request.body as { token?: string } | undefined)?.token,
         dependencies,
       );
-      if (verification.token === undefined || verification.result === undefined) {
+      if (
+        verification.token === undefined ||
+        verification.result === undefined
+      ) {
         return reply.code(400).send({
           integrationId: "tmdb",
-          status: "action_required",
-          saved: false,
-          diagnostic: {
-            code: "TMDB_TOKEN_REQUIRED",
-            message:
-              "Paste a valid TMDB API Read Access Token and try again.",
-            retryable: false,
-          },
+          ok: false,
+          status: "action-required",
+          messageCode: "CREDENTIAL_REQUIRED",
         });
       }
       if (!verification.result.ok) {
@@ -223,24 +188,21 @@ export function registerTmdbRoutes(
         );
         return reply.code(500).send({
           integrationId: "tmdb",
+          ok: false,
           status: "unavailable",
-          saved: false,
-          diagnostic: {
-            code: "INTEGRATION_STORAGE_FAILED",
-            message:
-              "The token was verified but could not be saved. Check local storage and try again.",
-            retryable: true,
-          },
+          messageCode: "SECURE_STORAGE_UNAVAILABLE",
         });
       }
 
       return reply.send({
         integrationId: "tmdb",
+        ok: true,
         status: "connected",
-        saved: true,
-        persistence: dependencies.secretStore.persistence,
-        message: "TMDB is connected. Metadata and discovery can now start.",
-        checkedAt: verification.result.checkedAt,
+        messageCode: "CONNECTED",
+        persistence:
+          dependencies.secretStore.persistence === "memory"
+            ? "memory"
+            : "secure-local",
       });
     },
   );

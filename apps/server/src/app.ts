@@ -1,11 +1,18 @@
-import Fastify, {
-  type FastifyBaseLogger,
-  type FastifyInstance,
-} from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
+import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
+import {
+  openStreamerDatabase,
+  type StreamerDatabase,
+} from "@streamer-ai/database";
 import { type FetchLike } from "./integrations/tmdb-client.js";
 import { createAppLogger } from "./logging.js";
 import { registerSystemRoutes } from "./routes/system.js";
+import { registerContentRoutes } from "./routes/content.js";
+import { registerInferenceRoutes } from "./routes/inference.js";
 import { registerTmdbRoutes } from "./routes/tmdb.js";
+import { StreamerCore } from "./services/streamer-core.js";
+import type { StreamerContentProvider } from "./services/content-provider.js";
 import {
   NonPersistentMemoryIntegrationStateStore,
   type IntegrationStateStore,
@@ -23,6 +30,9 @@ export interface CreateAppOptions {
   tmdbTimeoutMs?: number;
   secretStore?: SecretStore;
   integrationStateStore?: IntegrationStateStore;
+  database?: StreamerDatabase;
+  databaseFilename?: string;
+  contentProvider?: StreamerContentProvider;
 }
 
 function defaultFetch(): FetchLike {
@@ -35,7 +45,8 @@ function createStores(options: CreateAppOptions) {
   const integrationStateStore =
     options.integrationStateStore ??
     new NonPersistentMemoryIntegrationStateStore();
-  const environment = options.environment ?? process.env.NODE_ENV ?? "development";
+  const environment =
+    options.environment ?? process.env.NODE_ENV ?? "development";
 
   if (
     environment === "production" &&
@@ -52,6 +63,19 @@ function createStores(options: CreateAppOptions) {
 export function createApp(options: CreateAppOptions = {}): FastifyInstance {
   const stores = createStores(options);
   const now = options.now ?? (() => new Date());
+  const ownsDatabase = options.database === undefined;
+  let database = options.database;
+  if (database === undefined) {
+    const filename =
+      options.databaseFilename ??
+      (stores.environment === "test"
+        ? ":memory:"
+        : resolve(process.env.STREAMERAI_DATA_DIR ?? "data", "streamer-ai.db"));
+    if (filename !== ":memory:")
+      mkdirSync(resolve(filename, ".."), { recursive: true });
+    database = openStreamerDatabase({ filename, clock: now });
+  }
+  const core = new StreamerCore(database, now, options.contentProvider);
   const app =
     options.logger === false
       ? Fastify({ logger: false, bodyLimit: 64 * 1024 })
@@ -60,7 +84,10 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
           bodyLimit: 64 * 1024,
         });
 
-  if (!stores.secretStore.isPersistent || !stores.integrationStateStore.isPersistent) {
+  if (
+    !stores.secretStore.isPersistent ||
+    !stores.integrationStateStore.isPersistent
+  ) {
     app.log.warn(
       {
         code: "NON_PERSISTENT_DEVELOPMENT_STORAGE",
@@ -71,7 +98,8 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
   }
 
   app.setErrorHandler((error, request, reply) => {
-    const validationError = error.validation !== undefined;
+    const validationError =
+      typeof error === "object" && error !== null && "validation" in error;
     if (!validationError) {
       request.log.error(
         { err: error, code: "UNHANDLED_REQUEST_ERROR" },
@@ -94,6 +122,8 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
     integrationStateStore: stores.integrationStateStore,
     now,
   });
+  registerContentRoutes(app, { core });
+  registerInferenceRoutes(app);
   registerTmdbRoutes(app, {
     fetch: options.fetch ?? defaultFetch(),
     secretStore: stores.secretStore,
@@ -101,6 +131,10 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
     timeoutMs: options.tmdbTimeoutMs ?? 8_000,
     now,
   });
+
+  if (ownsDatabase) {
+    app.addHook("onClose", async () => database.close());
+  }
 
   return app;
 }

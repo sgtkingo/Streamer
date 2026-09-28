@@ -31,13 +31,12 @@ export function tmdbCatalogItem(
     configured,
     setup: {
       credentialType: "api_read_access_token",
-      documentationUrl:
-        "https://developer.themoviedb.org/docs/getting-started",
+      documentationUrl: "https://developer.themoviedb.org/docs/getting-started",
       automatedCheck: true,
       steps: [
         "Create or sign in to a TMDB account.",
         "Open API settings and copy the API Read Access Token.",
-        "Paste it in Streamer; the app verifies it before saving.",
+        "Paste it in StreamerAI; the app verifies it before saving.",
       ],
     },
   };

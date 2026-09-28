@@ -63,7 +63,11 @@ describe("system API", () => {
 
   it("refuses memory stores in production composition", () => {
     expect(() =>
-      createApp({ environment: "production", logger: false, fetch: unusedFetch }),
+      createApp({
+        environment: "production",
+        logger: false,
+        fetch: unusedFetch,
+      }),
     ).toThrow(/persistent SecretStore/);
   });
 });

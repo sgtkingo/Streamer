@@ -26,19 +26,32 @@ export const PUBLIC_INTEGRATION_ERROR_CODES = [
   "UNKNOWN",
 ] as const;
 
-export const PublicIntegrationErrorCodeSchema = z.enum(PUBLIC_INTEGRATION_ERROR_CODES);
+export const PublicIntegrationErrorCodeSchema = z.enum(
+  PUBLIC_INTEGRATION_ERROR_CODES,
+);
 
-export type PublicIntegrationErrorCode = z.infer<typeof PublicIntegrationErrorCodeSchema>;
+export type PublicIntegrationErrorCode = z.infer<
+  typeof PublicIntegrationErrorCodeSchema
+>;
 
-export const PUBLIC_INTEGRATION_SUCCESS_CODES = ["VERIFIED", "CONNECTED"] as const;
+export const PUBLIC_INTEGRATION_SUCCESS_CODES = [
+  "VERIFIED",
+  "CONNECTED",
+] as const;
 
-export const PublicIntegrationSuccessCodeSchema = z.enum(PUBLIC_INTEGRATION_SUCCESS_CODES);
+export const PublicIntegrationSuccessCodeSchema = z.enum(
+  PUBLIC_INTEGRATION_SUCCESS_CODES,
+);
 
-export type PublicIntegrationSuccessCode = z.infer<typeof PublicIntegrationSuccessCodeSchema>;
+export type PublicIntegrationSuccessCode = z.infer<
+  typeof PublicIntegrationSuccessCodeSchema
+>;
 
 export const IntegrationPersistenceSchema = z.enum(["memory", "secure-local"]);
 
-export type IntegrationPersistence = z.infer<typeof IntegrationPersistenceSchema>;
+export type IntegrationPersistence = z.infer<
+  typeof IntegrationPersistenceSchema
+>;
 
 const IntegrationConnectionSuccessSchema = z
   .object({
@@ -66,7 +79,9 @@ export const IntegrationConnectionResultSchema = z.discriminatedUnion("ok", [
   IntegrationConnectionFailureSchema,
 ]);
 
-export type IntegrationConnectionResult = z.infer<typeof IntegrationConnectionResultSchema>;
+export type IntegrationConnectionResult = z.infer<
+  typeof IntegrationConnectionResultSchema
+>;
 
 export const SetupProfileSchema = z
   .object({
