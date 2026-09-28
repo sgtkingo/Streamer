@@ -292,7 +292,7 @@ MVP identity is one household installation with one administrator and up to five
 
 - Local administrator passwords use Argon2id with a per-user salt; profile PINs, if offered, are separately rate-limited.
 - Google and Apple sign-in are deferred until a hosted identity/callback service exists. They are unnecessary for a private LAN MVP.
-- Generate an installation master key outside the database. Prefer the OS credential vault; where container boundaries prevent it, mount a dedicated key file with restrictive host ACLs.
+- Generate an installation master key outside the database. The portable Docker profile mounts a dedicated read-only key file with restrictive host ACLs and encrypts the application vault with AES-256-GCM. OS-specific credential stores are optional adapters, never a deployment requirement.
 - Encrypt provider tokens and other recoverable secrets using an authenticated cipher with a random nonce per value and versioned key ID.
 - Never put secrets in images, source control, Compose files, logs, URLs, crash reports, or AI prompts.
 - Support secret rotation and explicit provider disconnect, which deletes local provider credentials and invalidates sessions where the provider supports it.

@@ -143,6 +143,7 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
               initialTmdbState={tmdbState}
               initialWebshareState={webshareState}
               onTmdbConnected={() => setTmdbState("connected")}
+              onWebshareConnected={() => setWebshareState("connected")}
             />
           )}
           {step === 3 && (

@@ -6,6 +6,7 @@ and approved future decisions remain authoritative in [`../instructions`](../ins
 ## Start here
 
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) - install, run, test and debug the workspace.
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) - portable Docker profile, encrypted secrets and host Ollama.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) - boundaries, data flow and invariants.
 - [`API.md`](API.md) - currently implemented HTTP endpoints.
 - [`INTEGRATIONS.md`](INTEGRATIONS.md) - how to add metadata, media, subtitle,
@@ -23,17 +24,17 @@ The repository contains a working local vertical slice:
 - Library, editable Watch History and playback membership only after a live
   just-in-time media recheck;
 - SQLite canonical-title cache and provider ID mappings;
-- guided TMDB credential verification with sanitized public responses;
+- guided TMDB and Webshare credential verification with sanitized public responses;
 - durable conversational sessions and idempotent replay;
 - full local Ollama capability preflight and a structured-agent adapter;
-- provider-neutral contracts, family registries, TMDB normalization and a
-  Webshare media/ticket adapter.
+- provider-neutral contracts, family registries, TMDB normalization, portable
+  encrypted secret storage and a Webshare authentication/media/ticket adapter.
 
 The default content coordinator is `PreviewContentProvider`. Its records,
 ratings and availability are explicitly marked as preview facts and it cannot
 start playback. The TMDB, Webshare and Ollama adapter boundaries are ready for
-composition, but a live autonomous coordinator, Webshare guided authentication
-and real-account playback spike are not yet claimed as complete. Subtitle
+composition, but a live autonomous coordinator and Webshare real-account
+playback spike are not yet claimed as complete. Subtitle
 retrieval, web search and Cloudflare sync remain specified future adapters.
 
 ## Specification map

@@ -1,0 +1,14 @@
+.git
+.github
+.agents
+.codex
+.secrets
+node_modules
+**/node_modules
+**/dist
+coverage
+data
+.env
+.env.*
+*.log
+*.db*

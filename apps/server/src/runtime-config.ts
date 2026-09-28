@@ -11,6 +11,11 @@ export interface RuntimeConfig {
     readonly port: number;
     readonly dataDir: string;
   };
+  readonly secrets: {
+    readonly backend: "memory" | "encrypted-file";
+    readonly vaultFile: string;
+    readonly keyFile: string | null;
+  };
   readonly inference: {
     readonly provider: "ollama";
     readonly baseUrl: string;
@@ -104,6 +109,22 @@ export function readRuntimeConfig(
       `Unsupported INFERENCE_PROVIDER '${provider}'. This build supports 'ollama'.`,
     );
   }
+  const secretBackend = nonEmptySetting(
+    env.STREAMERAI_SECRET_BACKEND,
+    "memory",
+    "STREAMERAI_SECRET_BACKEND",
+  );
+  if (secretBackend !== "memory" && secretBackend !== "encrypted-file") {
+    throw new Error(
+      "STREAMERAI_SECRET_BACKEND must be 'memory' or 'encrypted-file'.",
+    );
+  }
+
+  const dataDir = nonEmptySetting(
+    env.STREAMERAI_DATA_DIR,
+    "data",
+    "STREAMERAI_DATA_DIR",
+  );
 
   return {
     environment: nonEmptySetting(env.NODE_ENV, "development", "NODE_ENV"),
@@ -120,11 +141,16 @@ export function readRuntimeConfig(
         1,
         65_535,
       ),
-      dataDir: nonEmptySetting(
-        env.STREAMERAI_DATA_DIR,
-        "data",
-        "STREAMERAI_DATA_DIR",
+      dataDir,
+    },
+    secrets: {
+      backend: secretBackend,
+      vaultFile: nonEmptySetting(
+        env.STREAMERAI_SECRET_VAULT_FILE,
+        `${dataDir}/secrets.vault`,
+        "STREAMERAI_SECRET_VAULT_FILE",
       ),
+      keyFile: env.STREAMERAI_SECRET_KEY_FILE?.trim() || null,
     },
     inference: {
       provider,
@@ -155,7 +181,7 @@ export function readRuntimeConfig(
       ),
       timeoutMs: integerSetting(
         env.INFERENCE_TIMEOUT_MS,
-        15_000,
+        60_000,
         "INFERENCE_TIMEOUT_MS",
         500,
         120_000,

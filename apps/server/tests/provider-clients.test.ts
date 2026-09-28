@@ -13,6 +13,7 @@ import { WebshareMediaProvider } from "../src/integrations/webshare-media-provid
 import {
   NonPersistentMemorySecretStore,
   TMDB_READ_TOKEN_SECRET_KEY,
+  md5Crypt,
 } from "../src/index.js";
 
 function response(status: number, body: string) {
@@ -24,6 +25,46 @@ function response(status: number, body: string) {
 }
 
 describe("provider HTTP clients", () => {
+  it("implements the standard md5-crypt vector used by Webshare login", () => {
+    expect(md5Crypt("password", "salt")).toBe("$1$salt$qJH7.N4xYta3aEG/dfqo/0");
+  });
+
+  it("exchanges Webshare credentials for WST without sending plaintext password", async () => {
+    const calls: Array<{
+      url: string;
+      body: string;
+      headers: Record<string, string>;
+    }> = [];
+    const fetch: ProviderFetch = async (url, init) => {
+      calls.push({ url, body: init.body ?? "", headers: init.headers });
+      return url.endsWith("/salt/")
+        ? response(
+            200,
+            "<response><status>OK</status><salt>salt</salt></response>",
+          )
+        : response(
+            200,
+            "<response><status>OK</status><token>test-session-token</token></response>",
+          );
+    };
+    const existingSecrets = new NonPersistentMemorySecretStore();
+    await existingSecrets.set(WEBSHARE_WST_SECRET_KEY, "expired-old-token");
+    const client = new WebshareClient({
+      secretStore: existingSecrets,
+      fetch,
+      baseUrl: "https://webshare.test/api",
+    });
+
+    const token = await client.authenticate("viewer", "password");
+
+    expect(token).toBe("test-session-token");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.body).toBe("username_or_email=viewer");
+    expect(calls[1]?.body).toContain("username_or_email=viewer");
+    expect(calls[1]?.body).toMatch(/password=[a-f\d]{40}/u);
+    expect(calls[1]?.body).not.toContain("password=password");
+    expect(calls.every((call) => call.headers.wst === undefined)).toBe(true);
+  });
   it("resolves the TMDB token at the boundary and never puts it in the URL", async () => {
     const secrets = new NonPersistentMemorySecretStore();
     const token = "sentinel-tmdb-token-never-in-url";

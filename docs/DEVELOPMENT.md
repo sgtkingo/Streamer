@@ -29,10 +29,31 @@ Provider credentials are entered through guided setup and belong in a
 `SecretStore`. Do not put real tokens in `.env`, fixtures, screenshots, logs or
 commits.
 
-Development currently uses a non-persistent memory store for credentials and a
-persistent SQLite integration-state store. The API reports this as mixed,
-non-durable storage. Production refuses to start without a persistent encrypted
-secret adapter.
+Development defaults to a non-persistent memory store for credentials and a
+persistent SQLite integration-state store. Docker production uses the included
+AES-256-GCM file vault. Its 32-byte master key is mounted separately as a
+read-only Docker secret, never stored in SQLite, the vault or `.env`. The API
+reports the actual persistence capabilities and production refuses to start
+with the memory fallback.
+
+## Docker home-server profile
+
+Generate the installation key without printing it:
+
+```sh
+node scripts/generate-master-key.mjs
+docker compose up --build
+```
+
+The generator refuses to overwrite an existing key. Back up both the Docker
+data volume and `.secrets/streamerai_master_key`; losing the key makes saved
+provider credentials intentionally unrecoverable. Do not copy the key into the
+data volume or source control.
+
+The default Compose profile expects host-native Ollama at
+`http://host.docker.internal:11434` and the installed model
+`qwen3.5:4b`. The API remains private behind nginx and the web app is
+available at `http://localhost:8080`.
 
 ## Commands
 

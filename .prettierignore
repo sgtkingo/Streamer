@@ -5,5 +5,7 @@ data
 pnpm-lock.yaml
 *.svg
 .env.example
+Dockerfile*
+deploy/nginx.conf
 docs
 instructions

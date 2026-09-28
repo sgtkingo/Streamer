@@ -9,6 +9,7 @@ import type {
   PublicIntegrationErrorCode,
   SetupProfile,
   PlaybackGrant as PlaybackGrantContract,
+  IntegrationId,
 } from "@streamer-ai/contracts";
 
 export type ConnectionState = "connected" | "not-configured" | "unavailable";
@@ -42,6 +43,10 @@ export interface PlaybackStartResult {
 export interface StreamerApi {
   getSetupStatus(): Promise<SetupStatus>;
   connectTmdb(token: string): Promise<ConnectionResult>;
+  connectWebshare(
+    username: string,
+    password: string,
+  ): Promise<ConnectionResult>;
   detectLocalAi(): Promise<LocalAiResult>;
   completeSetup(request: CompleteSetupRequest): Promise<void>;
   getHome(profileId: string): Promise<HomeFeed>;
@@ -162,10 +167,11 @@ const integrationErrors = new Set<PublicIntegrationErrorCode>([
 /** Copies only public contract fields so an unexpected server body can never reach UI state. */
 function readIntegrationResult(
   value: unknown,
+  expectedIntegrationId: IntegrationId,
 ): IntegrationConnectionResult | undefined {
   if (
     !isRecord(value) ||
-    value.integrationId !== "tmdb" ||
+    value.integrationId !== expectedIntegrationId ||
     typeof value.ok !== "boolean"
   )
     return undefined;
@@ -182,7 +188,7 @@ function readIntegrationResult(
       return undefined;
     return {
       ok: true,
-      integrationId: "tmdb",
+      integrationId: expectedIntegrationId,
       status: value.status,
       messageCode: value.messageCode,
       ...(persistence ? { persistence } : {}),
@@ -197,7 +203,7 @@ function readIntegrationResult(
     return undefined;
   return {
     ok: false,
-    integrationId: "tmdb",
+    integrationId: expectedIntegrationId,
     status: value.status,
     messageCode: value.messageCode as PublicIntegrationErrorCode,
     ...(persistence ? { persistence } : {}),
@@ -224,7 +230,7 @@ async function connectTmdb(
   }
 
   const body: unknown = await response.json().catch(() => undefined);
-  const result = readIntegrationResult(body);
+  const result = readIntegrationResult(body, "tmdb");
   if (result) return result;
   if (response.status === 401 || response.status === 403) {
     throw new ApiError(
@@ -234,6 +240,36 @@ async function connectTmdb(
   }
   throw new ApiError(
     "The connection could not be completed. Please try again.",
+    response.status,
+  );
+}
+
+async function connectWebshare(
+  username: string,
+  password: string,
+): Promise<IntegrationConnectionResult> {
+  let response: Response;
+  try {
+    response = await fetch("/api/v1/integrations/webshare/connect", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw new ApiError(
+      "The home server is unreachable. Check that StreamerAI is running.",
+    );
+  }
+  const body: unknown = await response.json().catch(() => undefined);
+  const result = readIntegrationResult(body, "webshare");
+  if (result) return result;
+  throw new ApiError(
+    response.status === 401
+      ? "Webshare did not accept these credentials. Check them and try again."
+      : "The Webshare connection could not be completed. Please try again.",
     response.status,
   );
 }
@@ -295,6 +331,7 @@ export const apiClient: StreamerApi = {
     };
   },
   connectTmdb,
+  connectWebshare,
   detectLocalAi: () =>
     request<LocalAiResult>("/inference/detect", {
       method: "POST",

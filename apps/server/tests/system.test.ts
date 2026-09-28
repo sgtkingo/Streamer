@@ -72,4 +72,22 @@ describe("system API", () => {
       }),
     ).toThrow(/persistent SecretStore/);
   });
+
+  it("maps an unsupported request content type to a safe client error", async () => {
+    const instance = app();
+    const response = await instance.inject({
+      method: "POST",
+      url: "/api/v1/inference/detect",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: "unexpected=true",
+    });
+
+    expect(response.statusCode).toBe(415);
+    expect(response.json()).toEqual({
+      error: {
+        code: "INVALID_REQUEST",
+        message: "The request is incomplete or invalid.",
+      },
+    });
+  });
 });

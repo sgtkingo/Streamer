@@ -117,6 +117,19 @@ sensitive header. Expected failure codes include `CREDENTIAL_REQUIRED`,
 `CREDENTIAL_REJECTED`, `RATE_LIMITED`, `TIMEOUT`, `INVALID_RESPONSE`,
 `PROVIDER_UNAVAILABLE` and `SECURE_STORAGE_UNAVAILABLE`.
 
+## Webshare connection
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/integrations/webshare/connect` | Exchange local username/password for WST, then store only WST through `SecretStore`. |
+| `DELETE` | `/integrations/webshare` | Delete WST and disable the connection. |
+
+Connect accepts `{ "username": "...", "password": "..." }`. The password is
+used only during the request to calculate Webshare's documented legacy
+`SHA1(MD5_CRYPT(password))` value; it is not persisted. Responses use the same
+allow-listed connection result as TMDB and never contain the password, digest,
+salt, WST or account identifier.
+
 ## Integration preparation boundaries
 
 - `POST /inference/detect` runs the bounded Ollama version, installed-model,
@@ -125,9 +138,10 @@ sensitive header. Expected failure codes include `CREDENTIAL_REQUIRED`,
 - The TMDB transport and normalized `MetadataProvider` adapter are implemented,
   but live discovery remains disabled until a live coordinator is explicitly
   composed.
-- The Webshare transport and normalized `MediaProvider` adapter are implemented.
-  Automated login and the real-account playback/Range capability spike remain
-  release gates; no endpoint accepts an unverified WST and marks it connected.
+- The Webshare transport, guided `salt`/`login` exchange and normalized
+  `MediaProvider` adapter are implemented. The real-account playback/Range
+  capability spike remains a release gate; no endpoint accepts a caller-supplied
+  WST or returns it to the browser.
 
 ## Versioning rules
 

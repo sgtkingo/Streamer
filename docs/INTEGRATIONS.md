@@ -67,6 +67,9 @@ provider recheck before returning a grant.
 - `WebshareClient` validates XML application status even on HTTP 200;
   `WebshareMediaProvider` filters restrictions, reinspects the selected file and
   exchanges the direct URL for an in-memory same-origin playback ticket.
+- Guided Webshare setup calls the documented `salt` and `login` endpoints,
+  derives the legacy password digest in request-local memory, discards the
+  plaintext password and stores only WST through `SecretStore`.
 - `OllamaAgentProvider` supplies bounded structured generation. The separate
   onboarding preflight verifies runtime version, exact model metadata,
   structured output, tool calls and model residency before enabling it.

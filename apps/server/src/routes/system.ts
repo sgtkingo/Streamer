@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { StreamerDatabase } from "@streamer-ai/database";
 import { integrationCatalogItem } from "../integrations/catalog.js";
 import { TMDB_READ_TOKEN_SECRET_KEY } from "../integrations/tmdb-client.js";
+import { WEBSHARE_WST_SECRET_KEY } from "../integrations/webshare-client.js";
 import type { IntegrationStateStore } from "../stores/integration-state-store.js";
 import type { SecretStore } from "../stores/secret-store.js";
 
@@ -40,10 +41,18 @@ async function getOllamaStatus(dependencies: SystemRouteDependencies) {
 }
 
 async function getWebshareStatus(dependencies: SystemRouteDependencies) {
-  const state = await dependencies.integrationStateStore.get("webshare");
+  const [hasSecret, state] = await Promise.all([
+    dependencies.secretStore.has(WEBSHARE_WST_SECRET_KEY),
+    dependencies.integrationStateStore.get("webshare"),
+  ]);
+  const configured = hasSecret && state?.configured === true;
   return {
-    configured: state?.configured === true,
-    status: state?.status ?? "not_configured",
+    configured,
+    status: configured
+      ? ("connected" as const)
+      : state?.configured === true
+        ? ("action_required" as const)
+        : (state?.status ?? "not_configured"),
     checkedAt: state?.checkedAt ?? null,
   } as const;
 }

@@ -49,14 +49,21 @@ therefore intentionally not simulated:
 
 1. Compose a production `LiveContentCoordinator` from the prepared adapters and
    add deterministic candidate matching/ranking fixtures.
-2. Complete Webshare username/password login after validating the documented
-   legacy digest against an authorized account; run Range, seeking, TTL, codec
-   and restriction tests. Until then Webshare cannot be marked connected by the
-   app.
-3. Supply a persistent encrypted `SecretStore` (OS keychain or external secret
-   manager). Production startup correctly refuses the memory fallback.
-4. Run the Ollama preflight on the target 8 GB GPU with `qwen3.5:4b` Q4_K_M and
-   record latency/VRAM acceptance results.
+2. Exercise the implemented Webshare username/password flow with the authorized
+   VIP account, then run Range, seeking, TTL, codec and restriction tests. Unit
+   and API tests verify the standard md5-crypt vector, `salt`/`login` request,
+   password disposal and WST-only storage; real-provider behavior remains the
+   acceptance gate.
+3. Run backup/restore and key-loss drills for the implemented portable
+   AES-256-GCM `SecretStore`. Its Docker key is separate from the persistent
+   application volume and production startup rejects the memory fallback.
+4. Repeat the full Ollama canary through Docker. The host-native acceptance run
+   passed all six checks on Ollama `0.34.4` with explicit `qwen3.5:4b`: 4.7B
+   Q4_K_M, 4096 context tokens, tools and structured output working, and
+   3,128,038,521 bytes reported resident in VRAM. The full preflight took about
+   4.15 seconds. The deployment timeout remains 60 seconds for slower cold
+   starts; the remaining gate is bridge connectivity and equivalent behavior
+   from the server container.
 5. Add the selected subtitle/search providers and optional Cloudflare sync only
    after their separate compliance and privacy gates.
 6. Perform the final desktop/mobile visual browser pass. The in-app browser

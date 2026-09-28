@@ -1,0 +1,57 @@
+name: streamer-ai
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      STREAMERAI_HOST: 0.0.0.0
+      STREAMERAI_PORT: 4400
+      STREAMERAI_DATA_DIR: /app/data
+      STREAMERAI_SECRET_BACKEND: encrypted-file
+      STREAMERAI_SECRET_KEY_FILE: /run/secrets/streamerai_master_key
+      STREAMERAI_SECRET_VAULT_FILE: /app/data/secrets.vault
+      INFERENCE_PROVIDER: ollama
+      INFERENCE_BASE_URL: http://host.docker.internal:11434
+      INFERENCE_MODEL: qwen3.5:4b
+      INFERENCE_CONTEXT_TOKENS: 4096
+      INFERENCE_MAX_OUTPUT_TOKENS: 128
+      INFERENCE_TIMEOUT_MS: 60000
+      OLLAMA_MINIMUM_VERSION: 0.5.0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    secrets:
+      - streamerai_master_key
+    volumes:
+      - streamerai_data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:4400/api/v1/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+secrets:
+  streamerai_master_key:
+    file: ./.secrets/streamerai_master_key
+
+volumes:
+  streamerai_data:

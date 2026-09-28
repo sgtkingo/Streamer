@@ -44,6 +44,7 @@ export {
   type WebshareFileInfo,
   type WebshareSearchItem,
 } from "./integrations/webshare-client.js";
+export { md5Crypt } from "./integrations/md5-crypt.js";
 export {
   WebshareMediaProvider,
   type PlaybackTicketInput,
@@ -67,8 +68,10 @@ export {
 } from "./stores/integration-state-store.js";
 export {
   createSecretStore,
+  EncryptedFileSecretStore,
   NonPersistentMemorySecretStore,
   type CreateSecretStoreOptions,
+  type EncryptedFileSecretStoreOptions,
   type SecretStore,
   type SecretStoreBackend,
   type SecretStoreCapabilities,

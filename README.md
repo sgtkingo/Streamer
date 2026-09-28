@@ -20,7 +20,8 @@ deployment and agent decisions live in [`instructions/`](instructions/).
   editable History.
 - TMDB connection verification designed around an in-app guided setup flow.
 - Provider-neutral contracts and registries, plus prepared TMDB metadata,
-  Webshare media/playback-ticket and Ollama structured-agent adapters.
+  guided Webshare authentication/media/playback-ticket and Ollama
+  structured-agent adapters.
 
 The current development feed is explicitly labeled as preview data and cannot
 create playback history. It does not claim production Webshare playback, live
@@ -45,6 +46,19 @@ Then install and run the workspace:
 pnpm install
 pnpm dev
 ```
+
+For the Docker deployment (the recommended home-server profile), generate the
+local encryption key once and start Compose:
+
+```sh
+node scripts/generate-master-key.mjs
+docker compose up --build
+```
+
+Open `http://localhost:8080`. Compose keeps the API private, persists SQLite and
+the encrypted credential vault in a named volume, and reaches host-native
+Ollama through `host.docker.internal`. The master key stays in the ignored
+`.secrets` directory and must be backed up separately.
 
 The web application is served by Vite during development and forwards `/api`
 requests to the local server. Copy `.env.example` to `.env` only for non-secret

@@ -20,6 +20,13 @@ function createApi(): StreamerApi {
       messageCode: "CONNECTED",
       persistence: "secure-local",
     }),
+    connectWebshare: vi.fn().mockResolvedValue({
+      ok: true,
+      integrationId: "webshare",
+      status: "connected",
+      messageCode: "CONNECTED",
+      persistence: "secure-local",
+    }),
     detectLocalAi: vi.fn().mockResolvedValue({
       ok: true,
       message: "Ready",
@@ -145,6 +152,28 @@ describe("onboarding", () => {
     expect(
       within(screen.getByRole("status")).queryByText(secret),
     ).not.toBeInTheDocument();
+  });
+
+  it("clears the Webshare password after local connection", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    render(<App api={api} forceOnboarding />);
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.type(screen.getByLabelText(/display name/i), "Alex");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    await user.type(screen.getByLabelText(/username or email/i), "viewer");
+    const password = "webshare-password-sentinel";
+    await user.type(screen.getByLabelText(/^password$/i), password);
+    await user.click(screen.getByRole("button", { name: /connect webshare/i }));
+
+    expect(
+      await screen.findByText(/session token is stored/i),
+    ).toBeInTheDocument();
+    expect(api.connectWebshare).toHaveBeenCalledWith("viewer", password);
+    expect(screen.queryByDisplayValue(password)).not.toBeInTheDocument();
+    expect(screen.queryByText(password)).not.toBeInTheDocument();
   });
 
   it("clearly identifies development-only memory storage", async () => {

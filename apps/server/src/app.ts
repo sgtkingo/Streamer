@@ -7,12 +7,14 @@ import {
 } from "@streamer-ai/database";
 import type { InferenceFetch } from "./integrations/ollama-preflight.js";
 import { type FetchLike } from "./integrations/tmdb-client.js";
+import type { ProviderFetch } from "./integrations/tmdb-api-client.js";
 import { createAppLogger } from "./logging.js";
 import { registerSystemRoutes } from "./routes/system.js";
 import { registerContentRoutes } from "./routes/content.js";
 import { registerInferenceRoutes } from "./routes/inference.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerTmdbRoutes } from "./routes/tmdb.js";
+import { registerWebshareRoutes } from "./routes/webshare.js";
 import { StreamerCore } from "./services/streamer-core.js";
 import type { StreamerContentProvider } from "./services/content-provider.js";
 import {
@@ -23,13 +25,18 @@ import {
   SqliteIntegrationStateStore,
   type IntegrationStateStore,
 } from "./stores/integration-state-store.js";
-import { createSecretStore, type SecretStore } from "./stores/secret-store.js";
+import {
+  createSecretStore,
+  EncryptedFileSecretStore,
+  type SecretStore,
+} from "./stores/secret-store.js";
 import { readRuntimeConfig, type RuntimeConfig } from "./runtime-config.js";
 
 export interface CreateAppOptions {
   environment?: string;
   logger?: FastifyBaseLogger | false;
   fetch?: FetchLike;
+  providerFetch?: ProviderFetch;
   inferenceFetch?: InferenceFetch;
   now?: () => Date;
   tmdbTimeoutMs?: number;
@@ -50,12 +57,33 @@ function defaultInferenceFetch(): InferenceFetch {
   return async (url, options) => globalThis.fetch(url, options);
 }
 
+function defaultProviderFetch(): ProviderFetch {
+  return async (url, options) => globalThis.fetch(url, options);
+}
+
 function createStores(
   options: CreateAppOptions,
   database: StreamerDatabase,
   environment: string,
+  runtimeConfig: RuntimeConfig,
 ) {
-  const secretStore = createSecretStore({ adapter: options.secretStore });
+  let configuredSecretStore = options.secretStore;
+  if (
+    configuredSecretStore === undefined &&
+    runtimeConfig.secrets.backend === "encrypted-file"
+  ) {
+    const keyFilename = runtimeConfig.secrets.keyFile;
+    if (keyFilename === null) {
+      throw new Error(
+        "STREAMERAI_SECRET_KEY_FILE is required for encrypted-file secret storage.",
+      );
+    }
+    configuredSecretStore = new EncryptedFileSecretStore({
+      filename: runtimeConfig.secrets.vaultFile,
+      keyFilename,
+    });
+  }
+  const secretStore = createSecretStore({ adapter: configuredSecretStore });
   const integrationStateStore =
     options.integrationStateStore ?? new SqliteIntegrationStateStore(database);
 
@@ -95,7 +123,7 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
       mkdirSync(resolve(filename, ".."), { recursive: true });
     database = openStreamerDatabase({ filename, clock: now });
   }
-  const stores = createStores(options, database, environment);
+  const stores = createStores(options, database, environment, runtimeConfig);
   const core = new StreamerCore(database, now, options.contentProvider);
   const app =
     options.logger === false
@@ -119,17 +147,27 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
   app.setErrorHandler((error, request, reply) => {
     const validationError =
       typeof error === "object" && error !== null && "validation" in error;
-    if (!validationError) {
+    const statusCode =
+      typeof error === "object" &&
+      error !== null &&
+      "statusCode" in error &&
+      typeof error.statusCode === "number"
+        ? error.statusCode
+        : undefined;
+    const clientError =
+      validationError ||
+      (statusCode !== undefined && statusCode >= 400 && statusCode < 500);
+    if (!clientError) {
       request.log.error(
         { err: error, code: "UNHANDLED_REQUEST_ERROR" },
         "Unhandled request error",
       );
     }
 
-    return reply.code(validationError ? 400 : 500).send({
+    return reply.code(validationError ? 400 : (statusCode ?? 500)).send({
       error: {
-        code: validationError ? "INVALID_REQUEST" : "INTERNAL_ERROR",
-        message: validationError
+        code: clientError ? "INVALID_REQUEST" : "INTERNAL_ERROR",
+        message: clientError
           ? "The request is incomplete or invalid."
           : "The request could not be completed.",
       },
@@ -158,6 +196,13 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
     secretStore: stores.secretStore,
     integrationStateStore: stores.integrationStateStore,
     timeoutMs: options.tmdbTimeoutMs ?? 8_000,
+    now,
+  });
+  registerWebshareRoutes(app, {
+    fetch: options.providerFetch ?? defaultProviderFetch(),
+    secretStore: stores.secretStore,
+    integrationStateStore: stores.integrationStateStore,
+    timeoutMs: 8_000,
     now,
   });
 

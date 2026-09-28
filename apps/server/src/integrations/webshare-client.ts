@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { SecretStore } from "../stores/secret-store.js";
 import {
   isAbortFailure,
@@ -8,6 +9,7 @@ import type {
   ProviderFetch,
   ProviderFetchResponse,
 } from "./tmdb-api-client.js";
+import { md5Crypt } from "./md5-crypt.js";
 
 export const WEBSHARE_WST_SECRET_KEY = "integration.webshare.wst";
 const DEFAULT_BASE_URL = "https://webshare.cz/api";
@@ -155,6 +157,53 @@ export class WebshareClient {
     return this.#secretStore.has(WEBSHARE_WST_SECRET_KEY);
   }
 
+  /** Exchange an explicit password for WST without retaining the password. */
+  async authenticate(
+    usernameOrEmail: string,
+    password: string,
+  ): Promise<string> {
+    const username = usernameOrEmail.trim();
+    if (username.length < 1 || username.length > 254) {
+      throw new TypeError("Webshare username or email is invalid.");
+    }
+    if (password.length < 1 || password.length > 1_024) {
+      throw new TypeError("Webshare password is invalid.");
+    }
+    const saltXml = await this.post(
+      "salt",
+      { username_or_email: username },
+      false,
+      false,
+    );
+    const salt = tag(saltXml, "salt");
+    if (salt === null) {
+      throw new WebshareResponseError("invalid-response", true, null);
+    }
+    let passwordDigest: string;
+    try {
+      passwordDigest = createHash("sha1")
+        .update(md5Crypt(password, salt), "utf8")
+        .digest("hex");
+    } catch {
+      throw new WebshareResponseError("invalid-response", true, null);
+    }
+    const loginXml = await this.post(
+      "login",
+      {
+        username_or_email: username,
+        password: passwordDigest,
+        keep_logged_in: "1",
+      },
+      false,
+      false,
+    );
+    const token = tag(loginXml, "token")?.trim();
+    if (token === undefined || token.length < 10 || token.length > 4_096) {
+      throw new WebshareResponseError("invalid-response", true, null);
+    }
+    return token;
+  }
+
   async search(input: {
     query: string;
     limit?: number;
@@ -250,8 +299,11 @@ export class WebshareClient {
     endpoint: string,
     values: Readonly<Record<string, string>>,
     requireAuthentication: boolean,
+    sendStoredCredential = true,
   ): Promise<string> {
-    const token = await this.#secretStore.get(WEBSHARE_WST_SECRET_KEY);
+    const token = sendStoredCredential
+      ? await this.#secretStore.get(WEBSHARE_WST_SECRET_KEY)
+      : undefined;
     if (requireAuthentication && token === undefined) {
       throw new ProviderRequestError("webshare", "not-configured", false);
     }

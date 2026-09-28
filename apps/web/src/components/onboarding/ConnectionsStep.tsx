@@ -8,6 +8,7 @@ interface ConnectionsStepProps {
   initialTmdbState: ConnectionState;
   initialWebshareState: ConnectionState;
   onTmdbConnected: () => void;
+  onWebshareConnected: () => void;
 }
 
 function uiStatusFor(state: ConnectionState): UiStatus {
@@ -21,6 +22,7 @@ export function ConnectionsStep({
   initialTmdbState,
   initialWebshareState,
   onTmdbConnected,
+  onWebshareConnected,
 }: ConnectionsStepProps) {
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
@@ -29,10 +31,20 @@ export function ConnectionsStep({
     initialTmdbState === "connected" ? "Your movie catalogue is ready." : "",
   );
   const [isMemoryOnly, setIsMemoryOnly] = useState(false);
+  const [webshareUsername, setWebshareUsername] = useState("");
+  const [websharePassword, setWebsharePassword] = useState("");
+  const [webshareStatus, setWebshareStatus] = useState<UiStatus>(
+    uiStatusFor(initialWebshareState),
+  );
+  const [webshareMessage, setWebshareMessage] = useState("");
 
   useEffect(() => {
     setStatus(uiStatusFor(initialTmdbState));
   }, [initialTmdbState]);
+
+  useEffect(() => {
+    setWebshareStatus(uiStatusFor(initialWebshareState));
+  }, [initialWebshareState]);
 
   const connect = async () => {
     const cleanToken = token.trim().replace(/^Bearer\s+/i, "");
@@ -81,6 +93,45 @@ export function ConnectionsStep({
     } catch (error) {
       setStatus("error");
       setMessage(safeErrorMessage(error));
+    }
+  };
+
+  const connectWebshare = async () => {
+    if (!webshareUsername.trim() || !websharePassword) {
+      setWebshareStatus("error");
+      setWebshareMessage("Enter your Webshare username and password first.");
+      return;
+    }
+    setWebshareStatus("working");
+    setWebshareMessage("Signing in through your home server…");
+    try {
+      const result = await api.connectWebshare(
+        webshareUsername.trim(),
+        websharePassword,
+      );
+      setWebsharePassword("");
+      if (!result.ok) {
+        setWebshareStatus("error");
+        setWebshareMessage(
+          result.messageCode === "CREDENTIAL_REJECTED"
+            ? "Webshare did not accept these credentials. Check them and try again."
+            : result.messageCode === "TIMEOUT"
+              ? "Webshare did not respond in time. Nothing was saved."
+              : "Webshare could not be connected. Nothing was saved.",
+        );
+        return;
+      }
+      setWebshareStatus("success");
+      setWebshareMessage(
+        result.persistence === "memory"
+          ? "Connected for this development session."
+          : "Connected. The session token is stored in the encrypted local vault.",
+      );
+      onWebshareConnected();
+    } catch (error) {
+      setWebsharePassword("");
+      setWebshareStatus("error");
+      setWebshareMessage(safeErrorMessage(error));
     }
   };
 
@@ -184,10 +235,7 @@ export function ConnectionsStep({
           )}
         </section>
 
-        <section
-          className="connection-card connection-card--muted"
-          aria-labelledby="webshare-heading"
-        >
+        <section className="connection-card" aria-labelledby="webshare-heading">
           <div className="connection-card__header">
             <div className="service-identity">
               <span className="service-mark service-mark--outline">WS</span>
@@ -196,13 +244,61 @@ export function ConnectionsStep({
                 <p>Playback source for your personal library.</p>
               </div>
             </div>
-            <StatusBadge status={uiStatusFor(initialWebshareState)} />
+            <StatusBadge status={webshareStatus} />
           </div>
-          <p className="muted-note">
-            {initialWebshareState === "connected"
-              ? "Connected. Playback will be enabled after the live coordinator completes its capability check."
-              : "The adapter and safe playback tickets are ready; guided sign-in still requires the authorized account capability test. You can finish setup and connect it later."}
-          </p>
+          {webshareStatus !== "success" && (
+            <div className="connection-form">
+              <p className="muted-note">
+                Sign in locally. Your password is used only to obtain a Webshare
+                session token and is never stored.
+              </p>
+              <label className="field">
+                <span>Username or email</span>
+                <input
+                  type="text"
+                  autoComplete="username"
+                  value={webshareUsername}
+                  onChange={(event) => setWebshareUsername(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Password</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={websharePassword}
+                  onChange={(event) => setWebsharePassword(event.target.value)}
+                />
+              </label>
+              <button
+                className="button button--secondary"
+                type="button"
+                onClick={connectWebshare}
+                disabled={webshareStatus === "working"}
+              >
+                {webshareStatus === "working"
+                  ? "Connecting…"
+                  : "Connect Webshare"}
+              </button>
+            </div>
+          )}
+          {webshareMessage && (
+            <p
+              className={`inline-message inline-message--${webshareStatus}`}
+              role={webshareStatus === "error" ? "alert" : "status"}
+            >
+              {webshareMessage}
+            </p>
+          )}
+          {webshareStatus === "success" && (
+            <div
+              className="connected-summary"
+              aria-label="Webshare connection details"
+            >
+              <span>Provider</span>
+              <strong>Webshare · Connected</strong>
+            </div>
+          )}
         </section>
       </div>
 

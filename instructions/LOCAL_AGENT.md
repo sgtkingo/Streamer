@@ -2,28 +2,35 @@
 
 > **Status:** ACTIVE DIRECTION — revised by owner for on-demand discovery on 2026-09-27
 > **Target hardware:** desktop with 8 GB GPU VRAM
-> **Last research check:** 2026-09-27
+> **Last hardware check:** 2026-09-28
 
 ## 1. Decision
 
-Use **Qwen3.5 4B, Q4_K_M quantization, through Ollama** as the default local model.
+Use the owner's installed **Qwen3.5 4B, Q4_K_M quantization, through Ollama** as
+the default local model. The tag is explicit so a future change to `latest`
+cannot silently replace the approved model.
 
 The current Ollama artifact is:
 
 ```text
 Model:        qwen3.5:4b
-Parameters:   4.66B
+Parameters:   4.7B
 Quantization: Q4_K_M
-Download:     approximately 3.4 GB
+Download:     3.4 GB on the target host
 License:      Apache-2.0
 Context:      4,096 tokens configured for this application
 Concurrency:  1
 Thinking:     disabled for routine structured tasks
 ```
 
-This is the best fit for an 8 GB display GPU: it leaves materially more headroom for the KV cache, runtime, desktop compositor, and video playback than a 9–12B model. Qwen documents broad multilingual coverage including Czech, English, and German, and the Ollama package declares tool use. The application still has to verify those abilities on its own fixtures; a model card is not an acceptance test.
+The 4B artifact leaves materially more headroom on the 8 GB GPU for the KV cache, desktop compositor, and video playback than the 9.7B artifact. The initial context stays at 4096 and `/api/ps` residency remains a release gate. Qwen documents broad multilingual coverage including Czech, English, and German, and the Ollama package declares tool use. The application still verifies those abilities on its own fixtures; a model card is not an acceptance test.
 
-Offer **Qwen3.5 9B Q4_K_M** as an optional Quality profile only after a hardware warm-up and evaluation pass:
+The target-host acceptance run passed version, exact model, metadata,
+structured-output, tool-call and residency checks. Ollama reported 3,128,038,521
+bytes resident in VRAM and the complete preflight took about 4.15 seconds.
+
+Offer the larger explicit tag only as a future Quality profile after a separate
+hardware warm-up and quality evaluation:
 
 ```text
 Model:        qwen3.5:9b
@@ -35,7 +42,7 @@ Context:      4,096 tokens on this hardware class
 Concurrency:  1
 ```
 
-The 9B artifact nearly fills an 8 GB GPU before runtime/context/display overhead. It may partially offload to system RAM, become slow, fail during playback, or OOM. It is therefore not the default and should be unloaded while video transcoding or other GPU-heavy work runs.
+The 9B artifact nearly fills an 8 GB GPU before runtime/context/display overhead. It may partially offload to system RAM, become slow, fail during playback, or OOM. It is not the default and should be unloaded during video transcoding or other GPU-heavy work.
 
 If the 4B model fails preflight or quality gates, deterministic browsing,
 previously validated records and playback remain usable, while open-ended
