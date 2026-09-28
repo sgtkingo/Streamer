@@ -1,4 +1,11 @@
 export type StorePersistence = "memory" | "persistent";
+export type SecretStoreBackend = "memory" | "os-keychain" | "external";
+
+export interface SecretStoreCapabilities {
+  readonly persistence: StorePersistence;
+  readonly backend: SecretStoreBackend;
+  readonly encryptedAtRest: boolean;
+}
 
 /**
  * A boundary for recoverable application secrets.
@@ -9,6 +16,7 @@ export type StorePersistence = "memory" | "persistent";
 export interface SecretStore {
   readonly persistence: StorePersistence;
   readonly isPersistent: boolean;
+  readonly capabilities: SecretStoreCapabilities;
 
   isReady(): Promise<boolean>;
   has(key: string): Promise<boolean>;
@@ -24,6 +32,11 @@ export interface SecretStore {
 export class NonPersistentMemorySecretStore implements SecretStore {
   readonly persistence = "memory" as const;
   readonly isPersistent = false;
+  readonly capabilities = {
+    persistence: "memory",
+    backend: "memory",
+    encryptedAtRest: false,
+  } as const;
   readonly #values = new Map<string, string>();
 
   async isReady(): Promise<boolean> {
@@ -45,4 +58,28 @@ export class NonPersistentMemorySecretStore implements SecretStore {
   async delete(key: string): Promise<void> {
     this.#values.delete(key);
   }
+}
+
+export interface CreateSecretStoreOptions {
+  /**
+   * Inject an OS-keychain or external secret-manager adapter. StreamerAI does
+   * not pretend that its memory fallback is encrypted or durable.
+   */
+  adapter?: SecretStore;
+}
+
+/** Composition point for a future OS keychain adapter. */
+export function createSecretStore(
+  options: CreateSecretStoreOptions = {},
+): SecretStore {
+  const store = options.adapter ?? new NonPersistentMemorySecretStore();
+  if (
+    store.capabilities.persistence !== store.persistence ||
+    store.capabilities.encryptedAtRest !== store.isPersistent
+  ) {
+    throw new Error(
+      "SecretStore capabilities are inconsistent: persistent stores must provide encryption at rest.",
+    );
+  }
+  return store;
 }

@@ -3,9 +3,11 @@ import {
   DiscoveryResponseSchema,
   HomeFeedSchema,
   type CatalogTitle,
+  type ContentMode,
   type DiscoveryRequest,
   type DiscoveryResponse,
   type HomeFeed,
+  type PlaybackGrant,
 } from "@streamer-ai/contracts";
 import { randomUUID } from "node:crypto";
 
@@ -23,12 +25,30 @@ export interface HomeFeedInput {
  */
 export interface StreamerContentProvider {
   readonly id: string;
+  readonly mode: ContentMode;
   bootstrapTitles(): readonly CatalogTitle[];
   buildHome(input: HomeFeedInput): HomeFeed;
   discover(
     request: DiscoveryRequest,
     completedAt: string,
+    context?: DiscoveryConversationContext,
   ): Promise<DiscoveryResponse>;
+  /** Revalidate availability and mint a short-lived URL immediately before playback. */
+  preparePlayback?(
+    profileId: string,
+    title: CatalogTitle,
+  ): Promise<PlaybackGrant>;
+}
+
+export interface DiscoveryConversationMessage {
+  readonly role: "system" | "user" | "assistant" | "tool";
+  readonly content: unknown;
+  readonly createdAt: string;
+}
+
+export interface DiscoveryConversationContext {
+  readonly sessionId: string;
+  readonly messages: readonly DiscoveryConversationMessage[];
 }
 
 const format = {
@@ -86,7 +106,6 @@ const previewTitles = [
       "Two people discover that a lakeside mailbox can bridge the years between them.",
     accentColor: "#6b4a3f",
     genres: ["Romance", "Drama"],
-    progressPercent: 42,
   }),
   title({
     id: "sai:preview:practical-magic",
@@ -182,6 +201,7 @@ const previewTitles = [
 /** Explicit development fallback. It never claims to contain live provider data. */
 export class PreviewContentProvider implements StreamerContentProvider {
   readonly id = "preview";
+  readonly mode = "preview" as const;
 
   bootstrapTitles(): readonly CatalogTitle[] {
     return previewTitles;
@@ -252,12 +272,15 @@ export class PreviewContentProvider implements StreamerContentProvider {
         (item.availability === "available" || item.availability === "partial"),
     );
     const unavailable = previewTitles.filter(
-      (item) =>
-        item.availability === "unavailable" || item.availability === "unknown",
+      (item) => item.availability === "unavailable",
+    );
+    const unverified = previewTitles.filter(
+      (item) => item.availability === "unknown",
     );
 
     return DiscoveryResponseSchema.parse({
       sessionId: request.sessionId ?? randomUUID(),
+      mode: "preview",
       stage: "completed",
       reply:
         "Here is a provider-neutral preview of the validated result layout. Connect live providers to replace preview records.",
@@ -271,10 +294,11 @@ export class PreviewContentProvider implements StreamerContentProvider {
       })),
       unavailable: unavailable.map((item) => ({
         title: { ...item, matchPercent: 72 },
-        reason:
-          item.availability === "unknown"
-            ? "Metadata found; media source needs a recheck."
-            : "Metadata found; no playable preview variant.",
+        reason: "Metadata found; no playable preview variant.",
+      })),
+      unverified: unverified.map((item) => ({
+        title: { ...item, matchPercent: 68 },
+        reason: "Metadata found; media source needs a recheck.",
       })),
       warnings: [
         "Preview fixture - ratings and availability are not live provider claims.",

@@ -18,8 +18,8 @@ export function WelcomeStep() {
         <div>
           <strong>Your viewing data stays at home.</strong>
           <p>
-            Connections are encrypted and credentials are kept by the server —
-            never in this browser.
+            Your profile and history are stored by your configured home server.
+            Provider credentials are never saved in this browser.
           </p>
         </div>
       </div>

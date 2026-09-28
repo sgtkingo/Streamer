@@ -18,10 +18,9 @@ export interface TmdbRouteDependencies {
 
 const tokenBodySchema = {
   type: "object",
-  required: ["token"],
   additionalProperties: false,
   properties: {
-    token: { type: "string", minLength: 20, maxLength: 2048 },
+    token: { type: "string", maxLength: 2048 },
   },
 } as const;
 
@@ -206,4 +205,19 @@ export function registerTmdbRoutes(
       });
     },
   );
+
+  app.delete("/api/v1/integrations/tmdb", async (_request, reply) => {
+    try {
+      await dependencies.secretStore.delete(TMDB_READ_TOKEN_SECRET_KEY);
+      await dependencies.integrationStateStore.delete("tmdb");
+      return reply.code(204).send();
+    } catch {
+      return reply.code(500).send({
+        integrationId: "tmdb",
+        ok: false,
+        status: "unavailable",
+        messageCode: "SECURE_STORAGE_UNAVAILABLE",
+      });
+    }
+  });
 }

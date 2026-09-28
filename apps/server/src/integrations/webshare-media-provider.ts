@@ -1,0 +1,241 @@
+import {
+  MediaCandidateRefSchema,
+  MediaSearchRequestSchema,
+  PlaybackGrantSchema,
+  PlaybackRequestSchema,
+  ProviderHealthSchema,
+  type MediaCandidate,
+  type MediaCandidateRef,
+  type MediaFormat,
+  type MediaProvider,
+  type MediaSearchRequest,
+  type MediaVariant,
+  type PlaybackGrant,
+  type PlaybackRequest,
+  type ProviderContext,
+  type ProviderDescriptor,
+  type ProviderHealth,
+} from "@streamer-ai/contracts";
+import { randomUUID } from "node:crypto";
+import { ProviderRequestError } from "./provider-http.js";
+import { WebshareClient } from "./webshare-client.js";
+
+const CONNECTOR_VERSION = "0.1.0";
+
+export interface PlaybackTicketInput {
+  grantId: string;
+  providerId: string;
+  titleId: string;
+  variantId: string;
+  directUrl: string;
+  expiresAt: string;
+}
+
+export interface WebshareMediaProviderOptions {
+  client: WebshareClient;
+  /** Stores the direct URL ephemerally and returns a same-origin ticket path. */
+  issuePlaybackTicket: (input: PlaybackTicketInput) => Promise<string> | string;
+  now?: () => Date;
+}
+
+function provenance(retrievedAt: string) {
+  return {
+    providerId: "webshare",
+    retrievedAt,
+    connectorVersion: CONNECTOR_VERSION,
+    confidence: 1,
+    validationState: "verified" as const,
+    expiresAt: null,
+  };
+}
+
+function mediaFormat(name: string, type: string | null): MediaFormat {
+  const normalized = name.toLowerCase();
+  const resolution =
+    /(?:^|[. _-])(2160p|1080p|720p|480p)(?:[. _-]|$)/i.exec(name)?.[1] ?? null;
+  const codec = /(?:x265|h[. ]?265|hevc)/i.test(name)
+    ? "H.265"
+    : /(?:x264|h[. ]?264|avc)/i.test(name)
+      ? "H.264"
+      : null;
+  const extension =
+    /\.([a-z0-9]{2,5})$/i.exec(name)?.[1]?.toLowerCase() ?? null;
+  const audioLanguages = [
+    ...(/(?:^|[. _-])(?:cz|cze|ces)(?:[. _-]|$)/i.test(normalized)
+      ? ["cs"]
+      : []),
+    ...(/(?:^|[. _-])(?:en|eng)(?:[. _-]|$)/i.test(normalized) ? ["en"] : []),
+  ];
+  return {
+    label:
+      [resolution, codec, type ?? extension].filter(Boolean).join(" · ") ||
+      "Video",
+    container: extension,
+    resolution,
+    videoCodec: codec,
+    audioLanguages,
+    subtitleLanguages: [],
+  };
+}
+
+/** Deterministic media adapter; it never exposes WST or a Webshare direct URL. */
+export class WebshareMediaProvider implements MediaProvider {
+  readonly #client: WebshareClient;
+  readonly #issuePlaybackTicket: WebshareMediaProviderOptions["issuePlaybackTicket"];
+  readonly #now: () => Date;
+
+  constructor(options: WebshareMediaProviderOptions) {
+    this.#client = options.client;
+    this.#issuePlaybackTicket = options.issuePlaybackTicket;
+    this.#now = options.now ?? (() => new Date());
+  }
+
+  descriptor(): ProviderDescriptor & { family: "media" } {
+    return {
+      id: "webshare",
+      family: "media",
+      displayName: "Webshare",
+      connectorVersion: CONNECTOR_VERSION,
+      capabilities: ["movie-search", "episode-search", "direct-play", "https"],
+      supportedLocales: ["cs", "en", "de"],
+      setupMode: "credentials",
+      credentialFields: [
+        {
+          id: "username",
+          label: "Username",
+          input: "text",
+          required: true,
+          secret: false,
+        },
+        {
+          id: "password",
+          label: "Password",
+          input: "password",
+          required: true,
+          secret: true,
+        },
+      ],
+      canAutoDetect: false,
+      supportsRecheck: true,
+      supportsDisconnect: true,
+      documentationUrl: "https://webshare.cz/apidoc/",
+      privacySummary:
+        "Canonical title searches and playback requests are sent to Webshare; credentials stay on the home server.",
+    };
+  }
+
+  async health(_context: ProviderContext): Promise<ProviderHealth> {
+    const configured = await this.#client.hasCredential();
+    return ProviderHealthSchema.parse({
+      status: configured ? "degraded" : "unavailable",
+      checkedAt: this.#now().toISOString(),
+      latencyMs: null,
+      code: configured ? null : "INVALID_CREDENTIALS",
+      connectorVersion: CONNECTOR_VERSION,
+    });
+  }
+
+  async search(
+    rawRequest: MediaSearchRequest,
+    _context: ProviderContext,
+  ): Promise<MediaCandidate[]> {
+    const request = MediaSearchRequestSchema.parse(rawRequest);
+    const episode =
+      request.seasonNumber !== null && request.episodeNumber !== null
+        ? ` S${String(request.seasonNumber).padStart(2, "0")}E${String(request.episodeNumber).padStart(2, "0")}`
+        : "";
+    const query = `${request.originalTitle ?? request.title}${
+      request.year === null ? "" : ` ${request.year}`
+    }${episode}`;
+    const result = await this.#client.search({ query, limit: request.limit });
+    const retrievedAt = this.#now().toISOString();
+    return result.items
+      .filter((item) => !item.passwordProtected)
+      .map((item) => ({
+        ref: { providerId: "webshare", candidateId: item.ident },
+        releaseName: item.name,
+        sizeBytes: item.size,
+        seasonNumber: request.seasonNumber,
+        episodeNumber: request.episodeNumber,
+        confidence: 0.5,
+        provenance: {
+          ...provenance(retrievedAt),
+          confidence: 0.5,
+          validationState: "derived" as const,
+        },
+      }));
+  }
+
+  async inspect(
+    rawCandidate: MediaCandidateRef,
+    _context: ProviderContext,
+  ): Promise<MediaVariant> {
+    const candidate = MediaCandidateRefSchema.parse(rawCandidate);
+    if (candidate.providerId !== "webshare") {
+      throw new ProviderRequestError("webshare", "invalid-response", false);
+    }
+    const file = await this.#client.fileInfo(candidate.candidateId);
+    if (
+      !file.downloadable ||
+      file.passwordProtected ||
+      file.copyrighted ||
+      (file.type !== null && !/video/i.test(file.type))
+    ) {
+      throw new ProviderRequestError("webshare", "forbidden", false);
+    }
+    return {
+      ref: candidate,
+      variantId: candidate.candidateId,
+      format: mediaFormat(file.name, file.type),
+      directPlay: true,
+      supportsHttpRange: false,
+      embeddedSubtitles: [],
+      provenance: provenance(this.#now().toISOString()),
+      expiresAt: null,
+    };
+  }
+
+  async createPlayback(
+    rawRequest: PlaybackRequest,
+    context: ProviderContext,
+  ): Promise<PlaybackGrant> {
+    const request = PlaybackRequestSchema.parse(rawRequest);
+    if (request.variant.providerId !== "webshare") {
+      throw new ProviderRequestError("webshare", "invalid-response", false);
+    }
+    // Required just-in-time restriction and availability recheck.
+    const variant = await this.inspect(
+      {
+        providerId: request.variant.providerId,
+        candidateId: request.variant.candidateId,
+      },
+      context,
+    );
+    if (variant.variantId !== request.variant.variantId) {
+      throw new ProviderRequestError("webshare", "invalid-response", false);
+    }
+    const directUrl = await this.#client.createVideoLink(
+      request.variant.candidateId,
+    );
+    const grantId = randomUUID();
+    const expiresAt = new Date(this.#now().getTime() + 60_000).toISOString();
+    const ticketUrl = await this.#issuePlaybackTicket({
+      grantId,
+      providerId: "webshare",
+      titleId: request.titleId,
+      variantId: variant.variantId,
+      directUrl,
+      expiresAt,
+    });
+    return PlaybackGrantSchema.parse({
+      grantId,
+      titleId: request.titleId,
+      providerId: "webshare",
+      variantId: variant.variantId,
+      url: ticketUrl,
+      supportsHttpRange: variant.supportsHttpRange,
+      expiresAt,
+      embeddedSubtitles: variant.embeddedSubtitles,
+    });
+  }
+}

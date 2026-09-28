@@ -1,0 +1,186 @@
+import { loadEnvFile } from "node:process";
+
+const DEFAULT_SERVER_PORT = 4400;
+const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
+const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b";
+
+export interface RuntimeConfig {
+  readonly environment: string;
+  readonly server: {
+    readonly host: string;
+    readonly port: number;
+    readonly dataDir: string;
+  };
+  readonly inference: {
+    readonly provider: "ollama";
+    readonly baseUrl: string;
+    readonly model: string;
+    readonly minimumVersion: string;
+    readonly contextTokens: number;
+    readonly maxOutputTokens: number;
+    readonly timeoutMs: number;
+  };
+}
+
+type Environment = Readonly<Record<string, string | undefined>>;
+
+function integerSetting(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+  minimum: number,
+  maximum: number,
+): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(
+      `${name} must be an integer between ${minimum} and ${maximum}.`,
+    );
+  }
+  return parsed;
+}
+
+function nonEmptySetting(
+  value: string | undefined,
+  fallback: string,
+  name: string,
+): string {
+  const parsed = value?.trim() || fallback;
+  if (parsed.length > 512) throw new Error(`${name} is too long.`);
+  return parsed;
+}
+
+function ollamaBaseUrl(value: string | undefined): string {
+  const raw = nonEmptySetting(
+    value,
+    DEFAULT_OLLAMA_BASE_URL,
+    "INFERENCE_BASE_URL",
+  );
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("INFERENCE_BASE_URL must be an absolute HTTP(S) URL.");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("INFERENCE_BASE_URL must use HTTP or HTTPS.");
+  }
+  const insecureAllowedHosts = new Set([
+    "127.0.0.1",
+    "localhost",
+    "::1",
+    "ollama",
+    "host.docker.internal",
+  ]);
+  if (
+    parsed.protocol === "http:" &&
+    !insecureAllowedHosts.has(parsed.hostname)
+  ) {
+    throw new Error(
+      "Remote INFERENCE_BASE_URL endpoints must use HTTPS; plain HTTP is limited to local or private runtime bridge names.",
+    );
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error(
+      "INFERENCE_BASE_URL must not contain credentials, a query, or a fragment.",
+    );
+  }
+  parsed.pathname = parsed.pathname.replace(/\/$/, "");
+  return parsed.toString().replace(/\/$/, "");
+}
+
+/** Parse all process settings once, before composing runtime dependencies. */
+export function readRuntimeConfig(
+  env: Environment = process.env,
+): RuntimeConfig {
+  const provider = nonEmptySetting(
+    env.INFERENCE_PROVIDER,
+    "ollama",
+    "INFERENCE_PROVIDER",
+  );
+  if (provider !== "ollama") {
+    throw new Error(
+      `Unsupported INFERENCE_PROVIDER '${provider}'. This build supports 'ollama'.`,
+    );
+  }
+
+  return {
+    environment: nonEmptySetting(env.NODE_ENV, "development", "NODE_ENV"),
+    server: {
+      host: nonEmptySetting(
+        env.STREAMERAI_HOST ?? env.HOST,
+        "127.0.0.1",
+        "STREAMERAI_HOST",
+      ),
+      port: integerSetting(
+        env.STREAMERAI_PORT ?? env.PORT,
+        DEFAULT_SERVER_PORT,
+        "STREAMERAI_PORT",
+        1,
+        65_535,
+      ),
+      dataDir: nonEmptySetting(
+        env.STREAMERAI_DATA_DIR,
+        "data",
+        "STREAMERAI_DATA_DIR",
+      ),
+    },
+    inference: {
+      provider,
+      baseUrl: ollamaBaseUrl(env.INFERENCE_BASE_URL ?? env.OLLAMA_BASE_URL),
+      model: nonEmptySetting(
+        env.INFERENCE_MODEL ?? env.OLLAMA_MODEL,
+        DEFAULT_OLLAMA_MODEL,
+        "INFERENCE_MODEL",
+      ),
+      minimumVersion: nonEmptySetting(
+        env.OLLAMA_MINIMUM_VERSION,
+        "0.5.0",
+        "OLLAMA_MINIMUM_VERSION",
+      ),
+      contextTokens: integerSetting(
+        env.INFERENCE_CONTEXT_TOKENS,
+        4_096,
+        "INFERENCE_CONTEXT_TOKENS",
+        512,
+        131_072,
+      ),
+      maxOutputTokens: integerSetting(
+        env.INFERENCE_MAX_OUTPUT_TOKENS,
+        128,
+        "INFERENCE_MAX_OUTPUT_TOKENS",
+        32,
+        4_096,
+      ),
+      timeoutMs: integerSetting(
+        env.INFERENCE_TIMEOUT_MS,
+        15_000,
+        "INFERENCE_TIMEOUT_MS",
+        500,
+        120_000,
+      ),
+    },
+  };
+}
+
+/**
+ * Load non-secret local overrides. A missing file is normal; malformed or
+ * unreadable files fail startup rather than silently running with surprises.
+ */
+export function loadLocalEnvironment(filename = ".env"): boolean {
+  try {
+    loadEnvFile(filename);
+    return true;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}

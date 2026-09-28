@@ -53,14 +53,16 @@ describe("provider-neutral content API", () => {
   });
 
   it("keeps discovery groups canonical, distinct and explicit about preview facts", async () => {
-    const result = await app().inject({
+    const instance = app();
+    const payload = {
+      profileId: "default",
+      message: "An autumn movie with Sandra Bullock",
+      idempotencyKey: "request-0001",
+    };
+    const result = await instance.inject({
       method: "POST",
       url: "/api/v1/discovery/sessions",
-      payload: {
-        profileId: "default",
-        message: "An autumn movie with Sandra Bullock",
-        idempotencyKey: "request-0001",
-      },
+      payload,
     });
     const body = result.json();
 
@@ -75,9 +77,27 @@ describe("provider-neutral content API", () => {
       ...body.available.map((item: { title: { id: string } }) => item.title.id),
     ];
     expect(new Set(ids).size).toBe(ids.length);
+
+    const replay = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/sessions",
+      payload,
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(body);
+
+    const conflict = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/sessions",
+      payload: { ...payload, message: "A completely different request" },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({
+      error: { code: "IDEMPOTENCY_CONFLICT" },
+    });
   });
 
-  it("adds explicit saves and playback starts to Library while appending History", async () => {
+  it("keeps explicit saves but never records preview playback as History", async () => {
     const instance = app();
     const titleId = encodeURIComponent("sai:preview:lake-house");
     const saved = await instance.inject({
@@ -99,16 +119,11 @@ describe("provider-neutral content API", () => {
       membershipReason: "explicit",
       state: "saved",
     });
-    expect(started.statusCode).toBe(200);
-    expect(started.json().library.items[0]).toMatchObject({
-      membershipReason: "playback",
-      state: "in-progress",
+    expect(started.statusCode).toBe(409);
+    expect(started.json()).toMatchObject({
+      error: { code: "PLAYBACK_NOT_CONFIGURED" },
     });
-    expect(history.json().items).toHaveLength(1);
-    expect(history.json().items[0]).toMatchObject({
-      title: { title: "The Lake House" },
-      completed: false,
-    });
+    expect(history.json().items).toHaveLength(0);
   });
 
   it("never offers playback for an unavailable title", async () => {
@@ -124,7 +139,39 @@ describe("provider-neutral content API", () => {
     });
   });
 
+  it("does not create profiles as a side effect of read requests", async () => {
+    const instance = app();
+    for (let index = 1; index <= 7; index += 1) {
+      const result = await instance.inject({
+        method: "GET",
+        url: `/api/v1/home?profileId=unknown-${index}`,
+      });
+      expect(result.statusCode).toBe(404);
+      expect(result.json()).toMatchObject({
+        error: { code: "PROFILE_NOT_FOUND" },
+      });
+    }
+
+    const defaultProfile = await instance.inject({
+      method: "GET",
+      url: "/api/v1/home?profileId=default",
+    });
+    expect(defaultProfile.statusCode).toBe(200);
+  });
+
   it("persists dynamically discovered provider titles in the canonical cache", async () => {
+    const metadataProvenance = {
+      providerId: "test-db",
+      retrievedAt: "2026-09-27T12:00:00.000Z",
+      connectorVersion: "1.0.0",
+      confidence: 1,
+      validationState: "verified" as const,
+      expiresAt: null,
+    };
+    const availabilityProvenance = {
+      ...metadataProvenance,
+      providerId: "test-media",
+    };
     const discoveredTitle = CatalogTitleSchema.parse({
       id: "sai:test:dynamic-title",
       kind: "movie",
@@ -136,7 +183,15 @@ describe("provider-neutral content API", () => {
       backdropUrl: null,
       accentColor: "#345678",
       genres: ["Drama"],
-      ratings: [{ source: "Test DB", value: 80, scale: 100, votes: 42 }],
+      ratings: [
+        {
+          source: "Test DB",
+          value: 80,
+          scale: 100,
+          votes: 42,
+          provenance: metadataProvenance,
+        },
+      ],
       matchPercent: 91,
       availability: "available",
       availabilityProvider: "test-media",
@@ -154,11 +209,14 @@ describe("provider-neutral content API", () => {
       seriesCoverage: null,
       metadataProvider: "test-db",
       metadataValidatedAt: "2026-09-27T12:00:00.000Z",
+      metadataProvenance,
+      availabilityProvenance,
       inLibrary: false,
       progressPercent: null,
     });
     const contentProvider: StreamerContentProvider = {
       id: "test-coordinator",
+      mode: "live",
       bootstrapTitles: () => [],
       buildHome: ({ profileId, generatedAt }) =>
         HomeFeedSchema.parse({
@@ -170,14 +228,26 @@ describe("provider-neutral content API", () => {
       discover: async (request, completedAt) =>
         DiscoveryResponseSchema.parse({
           sessionId: request.sessionId ?? "dynamic-session",
+          mode: "live",
           stage: "completed",
           reply: "Validated by injected test providers.",
           bestMatch: { title: discoveredTitle, reason: "Best test match." },
           available: [],
           unavailable: [],
+          unverified: [],
           warnings: [],
           completedAt,
         }),
+      preparePlayback: async (_profileId, title) => ({
+        grantId: "grant-dynamic",
+        titleId: title.id,
+        providerId: "test-media",
+        variantId: "variant-1",
+        url: "/api/v1/playback/grants/grant-dynamic",
+        supportsHttpRange: true,
+        expiresAt: "2026-09-27T12:05:00.000Z",
+        embeddedSubtitles: [],
+      }),
     };
     const instance = createApp({
       environment: "test",
@@ -201,9 +271,22 @@ describe("provider-neutral content API", () => {
       method: "PUT",
       url: "/api/v1/profiles/default/library/sai%3Atest%3Adynamic-title",
     });
+    const started = await instance.inject({
+      method: "POST",
+      url: "/api/v1/profiles/default/playback/start",
+      payload: { titleId: "sai:test:dynamic-title" },
+    });
 
     expect(discovery.statusCode).toBe(200);
     expect(saved.statusCode).toBe(200);
     expect(saved.json().items[0].title.id).toBe("sai:test:dynamic-title");
+    expect(started.statusCode).toBe(200);
+    expect(started.json()).toMatchObject({
+      playback: {
+        titleId: "sai:test:dynamic-title",
+        url: "/api/v1/playback/grants/grant-dynamic",
+      },
+      library: { items: [{ state: "in-progress" }] },
+    });
   });
 });

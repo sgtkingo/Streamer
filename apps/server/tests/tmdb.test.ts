@@ -88,11 +88,32 @@ describe("TMDB guided connection", () => {
     expect(await secretStore.has("integration.tmdb.read-token")).toBe(true);
     expect(result.body).not.toContain(TEST_TOKEN);
     expect(result.body).not.toContain("secretRef");
-    expect(catalog.json()).toMatchObject({
-      persistence: "memory",
-      items: [{ id: "tmdb", status: "connected", configured: true }],
-    });
+    const catalogBody = catalog.json();
+    expect(catalogBody.persistence).toBe("memory");
+    expect(
+      catalogBody.items.find((item: { id: string }) => item.id === "tmdb"),
+    ).toMatchObject({ id: "tmdb", status: "connected", configured: true });
     expect(catalog.body).not.toContain(TEST_TOKEN);
+  });
+
+  it("disconnects without exposing or retaining the credential", async () => {
+    const { instance, secretStore, integrationStateStore } = app(
+      fetchReturning(200, tmdbConfiguration()),
+    );
+    await instance.inject({
+      method: "POST",
+      url: "/api/v1/integrations/tmdb/connect",
+      payload: { token: TEST_TOKEN },
+    });
+
+    const result = await instance.inject({
+      method: "DELETE",
+      url: "/api/v1/integrations/tmdb",
+    });
+
+    expect(result.statusCode).toBe(204);
+    expect(await secretStore.has("integration.tmdb.read-token")).toBe(false);
+    expect(await integrationStateStore.get("tmdb")).toBeUndefined();
   });
 
   it("returns a sanitized, actionable 401 and does not save a rejected token", async () => {

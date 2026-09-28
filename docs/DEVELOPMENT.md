@@ -29,9 +29,10 @@ Provider credentials are entered through guided setup and belong in a
 `SecretStore`. Do not put real tokens in `.env`, fixtures, screenshots, logs or
 commits.
 
-Development currently uses non-persistent memory stores for credentials and
-integration state. The API reports that limitation. Production refuses to
-start with those stores.
+Development currently uses a non-persistent memory store for credentials and a
+persistent SQLite integration-state store. The API reports this as mixed,
+non-durable storage. Production refuses to start without a persistent encrypted
+secret adapter.
 
 ## Commands
 
@@ -39,7 +40,7 @@ start with those stores.
 pnpm dev             # web and server watch processes
 pnpm format          # write Prettier formatting
 pnpm format:check    # verify formatting
-pnpm lint            # package lint scripts
+pnpm lint            # ESLint across the complete TypeScript workspace
 pnpm typecheck       # strict TypeScript checks
 pnpm test            # all unit/component/API tests
 pnpm build           # production builds
@@ -75,6 +76,10 @@ and test both persistence and domain constraints.
 
 Use internal canonical IDs for foreign keys. Provider-specific IDs belong in
 `external_entity_mappings`.
+
+Discovery changes must also preserve `discovery_sessions`, ordered messages and
+`idempotency_records`. Never acknowledge an idempotent request before its
+assistant result and replay record are durable.
 
 ## API and contract changes
 

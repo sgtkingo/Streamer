@@ -6,6 +6,7 @@ import { StatusBadge, type UiStatus } from "./StatusBadge";
 interface ConnectionsStepProps {
   api: StreamerApi;
   initialTmdbState: ConnectionState;
+  initialWebshareState: ConnectionState;
   onTmdbConnected: () => void;
 }
 
@@ -18,6 +19,7 @@ function uiStatusFor(state: ConnectionState): UiStatus {
 export function ConnectionsStep({
   api,
   initialTmdbState,
+  initialWebshareState,
   onTmdbConnected,
 }: ConnectionsStepProps) {
   const [token, setToken] = useState("");
@@ -41,7 +43,7 @@ export function ConnectionsStep({
     }
 
     setStatus("working");
-    setMessage("Securely testing with TMDB…");
+    setMessage("Testing the token with TMDB…");
     try {
       const result = await api.connectTmdb(cleanToken);
       if (!result.ok) {
@@ -194,18 +196,20 @@ export function ConnectionsStep({
                 <p>Playback source for your personal library.</p>
               </div>
             </div>
-            <StatusBadge status="unavailable" />
+            <StatusBadge status={uiStatusFor(initialWebshareState)} />
           </div>
           <p className="muted-note">
-            Guided sign-in is being prepared. You can finish setup now and
-            connect Webshare later.
+            {initialWebshareState === "connected"
+              ? "Connected. Playback will be enabled after the live coordinator completes its capability check."
+              : "The adapter and safe playback tickets are ready; guided sign-in still requires the authorized account capability test. You can finish setup and connect it later."}
           </p>
         </section>
       </div>
 
       <p className="privacy-line">
-        <span aria-hidden="true">◆</span> Tokens travel only to your home server
-        over an encrypted connection. They are never saved in browser storage.
+        <span aria-hidden="true">◆</span> Tokens are sent to your home server
+        for verification and are never saved in browser storage. Use HTTPS
+        whenever the app is accessed beyond the same trusted device.
       </p>
     </div>
   );

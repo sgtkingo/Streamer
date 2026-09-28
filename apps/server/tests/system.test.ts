@@ -53,12 +53,14 @@ describe("system API", () => {
 
     expect(setup.json()).toMatchObject({
       status: "needs_setup",
-      storage: { persistence: "memory", durable: false },
+      storage: { persistence: "mixed", durable: false },
     });
-    expect(integrations.json()).toMatchObject({
-      persistence: "memory",
-      items: [{ id: "tmdb", status: "not_configured" }],
-    });
+    const integrationBody = integrations.json();
+    expect(integrationBody.persistence).toBe("memory");
+    expect(integrationBody.items).toHaveLength(6);
+    expect(
+      integrationBody.items.find((item: { id: string }) => item.id === "tmdb"),
+    ).toMatchObject({ id: "tmdb", status: "action_required" });
   });
 
   it("refuses memory stores in production composition", () => {

@@ -3,7 +3,9 @@ export * from "./errors.js";
 export { MIGRATIONS, type Migration } from "./migrations.js";
 export {
   CatalogTitlesRepository,
+  DiscoverySessionsRepository,
   HistoryRepository,
+  IdempotencyRepository,
   IntegrationsRepository,
   JobsRepository,
   LibraryRepository,

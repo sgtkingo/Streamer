@@ -10,6 +10,8 @@ and approved future decisions remain authoritative in [`../instructions`](../ins
 - [`API.md`](API.md) - currently implemented HTTP endpoints.
 - [`INTEGRATIONS.md`](INTEGRATIONS.md) - how to add metadata, media, subtitle,
   search, agent and sync providers.
+- [`VALIDATION.md`](VALIDATION.md) - second-sight findings, verified invariants
+  and external release gates.
 
 ## Current milestone
 
@@ -18,17 +20,21 @@ The repository contains a working local vertical slice:
 - conversational Home with populated default sections;
 - validated-result layout with a best match, playable results and visibly
   unavailable results;
-- Library, automatic playback membership and append-only Watch History;
+- Library, editable Watch History and playback membership only after a live
+  just-in-time media recheck;
 - SQLite canonical-title cache and provider ID mappings;
 - guided TMDB credential verification with sanitized public responses;
-- local Ollama detection;
-- provider-neutral contracts and an injectable discovery coordinator.
+- durable conversational sessions and idempotent replay;
+- full local Ollama capability preflight and a structured-agent adapter;
+- provider-neutral contracts, family registries, TMDB normalization and a
+  Webshare media/ticket adapter.
 
 The default content coordinator is `PreviewContentProvider`. Its records,
-ratings and availability are explicitly marked as preview facts. Live TMDB
-metadata, Webshare playback, subtitle retrieval, web search, Cloudflare sync
-and autonomous model orchestration are specified but are not yet claimed as
-implemented.
+ratings and availability are explicitly marked as preview facts and it cannot
+start playback. The TMDB, Webshare and Ollama adapter boundaries are ready for
+composition, but a live autonomous coordinator, Webshare guided authentication
+and real-account playback spike are not yet claimed as complete. Subtitle
+retrieval, web search and Cloudflare sync remain specified future adapters.
 
 ## Specification map
 

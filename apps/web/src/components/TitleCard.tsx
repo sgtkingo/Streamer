@@ -7,6 +7,8 @@ interface TitleCardProps {
   onPlay: (item: CatalogTitle) => void;
   onAdd: (item: CatalogTitle) => void;
   onRemove?: (item: CatalogTitle) => void;
+  playbackEnabled?: boolean;
+  pendingAction?: "play" | "add" | "remove";
 }
 
 function ratingLabel(item: CatalogTitle): string {
@@ -26,6 +28,18 @@ function availabilityLabel(item: CatalogTitle): string {
   return `Not found on ${item.availabilityProvider ?? "media source"}`;
 }
 
+export function titleHasPlayableVariant(item: CatalogTitle): boolean {
+  if (item.formats.length === 0) return false;
+  if (item.availability === "available") return true;
+  return (
+    item.kind === "series" &&
+    item.availability === "partial" &&
+    item.seriesCoverage !== null &&
+    item.seriesCoverage.episodesAvailable > 0 &&
+    item.seriesCoverage.nextEpisodeLabel !== null
+  );
+}
+
 export function TitleCard({
   item,
   reason,
@@ -33,13 +47,15 @@ export function TitleCard({
   onPlay,
   onAdd,
   onRemove,
+  playbackEnabled = true,
+  pendingAction,
 }: TitleCardProps) {
-  const playable =
-    item.availability === "available" || item.availability === "partial";
+  const playable = titleHasPlayableVariant(item);
   const classNames = [
     "title-card",
     hero ? "title-card--hero" : "",
-    !playable ? "title-card--muted" : "",
+    item.availability === "unavailable" ? "title-card--unavailable" : "",
+    item.availability === "unknown" ? "title-card--unknown" : "",
     item.kind === "series" ? "title-card--series" : "",
   ]
     .filter(Boolean)
@@ -49,6 +65,7 @@ export function TitleCard({
     <article
       className={classNames}
       style={{ "--card-accent": item.accentColor } as React.CSSProperties}
+      aria-busy={pendingAction ? "true" : undefined}
     >
       <div className="title-card__art" aria-hidden="true">
         {item.posterUrl ? (
@@ -99,14 +116,29 @@ export function TitleCard({
           </div>
         )}
         <div className="title-card__actions">
-          {playable && (
+          {playable && playbackEnabled && (
             <button
               className="button button--primary button--compact"
               type="button"
               onClick={() => onPlay(item)}
+              disabled={pendingAction !== undefined}
             >
               <span aria-hidden="true">▶</span>{" "}
-              {item.kind === "series" ? "Play next" : "Play"}
+              {pendingAction === "play"
+                ? "Checking…"
+                : item.kind === "series"
+                  ? "Check & play next"
+                  : "Check & play"}
+            </button>
+          )}
+          {playable && !playbackEnabled && (
+            <button
+              className="button button--secondary button--compact"
+              type="button"
+              disabled
+              title="Connect a streaming source to enable playback"
+            >
+              Streaming source required
             </button>
           )}
           {item.inLibrary ? (
@@ -115,8 +147,9 @@ export function TitleCard({
                 className="button button--secondary button--compact"
                 type="button"
                 onClick={() => onRemove(item)}
+                disabled={pendingAction !== undefined}
               >
-                Remove
+                {pendingAction === "remove" ? "Removing…" : "Remove"}
               </button>
             ) : (
               <span className="in-library">✓ In Library</span>
@@ -126,8 +159,9 @@ export function TitleCard({
               className="button button--secondary button--compact"
               type="button"
               onClick={() => onAdd(item)}
+              disabled={pendingAction !== undefined}
             >
-              + Add to Library
+              {pendingAction === "add" ? "Adding…" : "+ Add to Library"}
             </button>
           )}
         </div>

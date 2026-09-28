@@ -6,9 +6,13 @@ import type { StreamerApi } from "./api/client";
 
 function createApi(): StreamerApi {
   return {
-    getSetupStatus: vi
-      .fn()
-      .mockResolvedValue({ tmdb: "not-configured", localAi: "not-configured" }),
+    getSetupStatus: vi.fn().mockResolvedValue({
+      complete: true,
+      tmdb: "not-configured",
+      webshare: "not-configured",
+      localAi: "not-configured",
+      playback: false,
+    }),
     connectTmdb: vi.fn().mockResolvedValue({
       ok: true,
       integrationId: "tmdb",
@@ -31,11 +35,13 @@ function createApi(): StreamerApi {
     }),
     discover: vi.fn().mockResolvedValue({
       sessionId: "session-1",
+      mode: "preview",
       stage: "completed",
       reply: "Ready",
       bestMatch: null,
       available: [],
       unavailable: [],
+      unverified: [],
       warnings: [],
       completedAt: "2026-09-27T12:00:00.000Z",
     }),
@@ -45,10 +51,22 @@ function createApi(): StreamerApi {
       .mockResolvedValue({ profileId: "default", items: [] }),
     removeFromLibrary: vi.fn().mockResolvedValue(undefined),
     getHistory: vi.fn().mockResolvedValue({ profileId: "default", items: [] }),
+    removeHistoryEvent: vi.fn().mockResolvedValue(undefined),
+    clearHistory: vi.fn().mockResolvedValue(undefined),
     startPlayback: vi.fn().mockResolvedValue({
       ok: true,
       eventId: "event-1",
       library: { profileId: "default", items: [] },
+      playback: {
+        grantId: "grant-1",
+        titleId: "sai:title:lake-house",
+        providerId: "test-media",
+        variantId: "variant-1",
+        url: "https://media.example/stream",
+        supportsHttpRange: true,
+        expiresAt: "2026-09-27T12:05:00.000Z",
+        embeddedSubtitles: [],
+      },
     }),
   };
 }
@@ -209,20 +227,21 @@ describe("conversational Home", () => {
     });
     vi.mocked(api.discover).mockResolvedValue({
       sessionId: "session-1",
+      mode: "live",
       stage: "completed",
       reply: "A warm seasonal match.",
       bestMatch: { title, reason: "Requested actor and autumn mood." },
       available: [],
       unavailable: [],
+      unverified: [],
       warnings: [],
       completedAt: "2026-09-27T12:00:00.000Z",
     });
     window.history.replaceState({}, "", "/");
-    window.localStorage.setItem("streamer-ai:onboarding-complete", "true");
     render(<App api={api} />);
 
     await user.type(
-      screen.getByLabelText(/ask streamerai/i),
+      await screen.findByLabelText(/ask streamerai/i),
       "an autumn movie with Sandra Bullock",
     );
     await user.click(screen.getByRole("button", { name: /find something/i }));
@@ -234,7 +253,7 @@ describe("conversational Home", () => {
       name: /a considered shortlist/i,
     });
     expect(
-      within(results).getByRole("button", { name: /^play$/i }),
+      within(results).getByRole("button", { name: /check & play/i }),
     ).toBeInTheDocument();
     await user.click(
       within(results).getByRole("button", { name: /add to library/i }),

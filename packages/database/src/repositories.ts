@@ -1,6 +1,7 @@
 import {
   INTEGRATION_DESCRIPTORS,
   CatalogTitleSchema,
+  ContentModeSchema,
   IntegrationHealthStateSchema,
   IntegrationIdSchema,
   IntegrationPublicStatusSchema,
@@ -15,13 +16,22 @@ import type BetterSqlite3 from "better-sqlite3";
 import { DatabaseValidationError, ProfileLimitError } from "./errors.js";
 import type {
   AppendWatchHistoryInput,
+  AppendDiscoveryMessageInput,
   CanonicalTitleData,
   CanonicalTitleRecord,
+  ClaimIdempotencyInput,
   ClaimJobInput,
   Clock,
+  CompleteIdempotencyInput,
+  CreateDiscoverySessionInput,
   CreateProfileInput,
+  DiscoveryMessageRecord,
+  DiscoverySessionRecord,
   EnqueueJobInput,
   EnqueueSyncOperationInput,
+  FailIdempotencyInput,
+  IdempotencyClaim,
+  IdempotencyRecord,
   Job,
   LibraryEntryRecord,
   Profile,
@@ -122,6 +132,40 @@ interface WatchHistoryRow {
   occurred_at: string;
 }
 
+interface DiscoverySessionRow {
+  id: string;
+  profile_id: string;
+  mode: string;
+  state: string;
+  context_json: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+interface DiscoveryMessageRow {
+  id: string;
+  session_id: string;
+  ordinal: number;
+  role: string;
+  content_json: string;
+  request_id: string | null;
+  created_at: string;
+}
+
+interface IdempotencyRow {
+  scope: string;
+  key: string;
+  request_hash: string;
+  state: string;
+  response_json: string | null;
+  status_code: number | null;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+}
+
 const isoNow = (clock: Clock): string => clock().toISOString();
 
 function assertShortString(
@@ -202,6 +246,55 @@ function watchHistoryFromRow(row: WatchHistoryRow): WatchHistoryRecord {
     episodeLabel: row.episode_label,
     progressPercent: row.progress_percent,
     occurredAt: row.occurred_at,
+  };
+}
+
+function discoverySessionFromRow<TContext>(
+  row: DiscoverySessionRow,
+): DiscoverySessionRecord<TContext> {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    mode: ContentModeSchema.parse(row.mode),
+    state: row.state as DiscoverySessionRecord["state"],
+    context: parseJson<TContext>(row.context_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
+function discoveryMessageFromRow<TContent>(
+  row: DiscoveryMessageRow,
+): DiscoveryMessageRecord<TContent> {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    ordinal: row.ordinal,
+    role: row.role as DiscoveryMessageRecord["role"],
+    content: parseJson<TContent>(row.content_json),
+    requestId: row.request_id,
+    createdAt: row.created_at,
+  };
+}
+
+function idempotencyFromRow<TResponse>(
+  row: IdempotencyRow,
+): IdempotencyRecord<TResponse> {
+  return {
+    scope: row.scope,
+    key: row.key,
+    requestHash: row.request_hash,
+    state: row.state as IdempotencyRecord["state"],
+    response:
+      row.response_json === null
+        ? null
+        : parseJson<TResponse>(row.response_json),
+    statusCode: row.status_code,
+    errorCode: row.error_code,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
   };
 }
 
@@ -446,8 +539,64 @@ export class CatalogTitlesRepository {
   ) {}
 
   upsert(input: UpsertCanonicalTitleInput): CanonicalTitleRecord {
-    const data = validateCanonicalTitle(input);
-    const existing = this.get(data.id);
+    const incoming = validateCanonicalTitle(input);
+    const existing = this.get(incoming.id);
+    if (existing !== null && existing.kind !== incoming.kind) {
+      throw new DatabaseValidationError(
+        `Canonical title '${incoming.id}' cannot change media kind.`,
+      );
+    }
+    const existingData =
+      existing === null
+        ? null
+        : (({ createdAt: _createdAt, updatedAt: _updatedAt, ...data }) => data)(
+            existing,
+          );
+    const metadataIsFresh =
+      existingData === null ||
+      Date.parse(incoming.metadataValidatedAt) >=
+        Date.parse(existingData.metadataValidatedAt);
+    const incomingAvailabilityTime =
+      incoming.availabilityCheckedAt === null
+        ? Number.NEGATIVE_INFINITY
+        : Date.parse(incoming.availabilityCheckedAt);
+    const existingAvailabilityTime =
+      existingData?.availabilityCheckedAt === null ||
+      existingData?.availabilityCheckedAt === undefined
+        ? Number.NEGATIVE_INFINITY
+        : Date.parse(existingData.availabilityCheckedAt);
+    const availabilityIsFresh =
+      existingData === null ||
+      incomingAvailabilityTime >= existingAvailabilityTime;
+    const data = validateCanonicalTitle({
+      ...incoming,
+      ...(metadataIsFresh || existingData === null
+        ? {}
+        : {
+            title: existingData.title,
+            originalTitle: existingData.originalTitle,
+            year: existingData.year,
+            synopsis: existingData.synopsis,
+            posterUrl: existingData.posterUrl,
+            backdropUrl: existingData.backdropUrl,
+            accentColor: existingData.accentColor,
+            genres: existingData.genres,
+            ratings: existingData.ratings,
+            metadataProvider: existingData.metadataProvider,
+            metadataValidatedAt: existingData.metadataValidatedAt,
+            metadataProvenance: existingData.metadataProvenance,
+          }),
+      ...(availabilityIsFresh || existingData === null
+        ? {}
+        : {
+            availability: existingData.availability,
+            availabilityProvider: existingData.availabilityProvider,
+            availabilityCheckedAt: existingData.availabilityCheckedAt,
+            formats: existingData.formats,
+            seriesCoverage: existingData.seriesCoverage,
+            availabilityProvenance: existingData.availabilityProvenance,
+          }),
+    });
     const now = isoNow(this.clock);
     this.database
       .prepare(
@@ -739,6 +888,389 @@ export class HistoryRepository {
         `History event '${id}' does not exist.`,
       );
     return watchHistoryFromRow(row);
+  }
+}
+
+export class DiscoverySessionsRepository {
+  constructor(
+    private readonly database: BetterSqlite3.Database,
+    private readonly clock: Clock,
+  ) {}
+
+  create<TContext = Record<string, never>>(
+    input: CreateDiscoverySessionInput<TContext>,
+  ): DiscoverySessionRecord<TContext> {
+    const now = isoNow(this.clock);
+    this.database
+      .prepare(
+        `
+        INSERT INTO discovery_sessions (
+          id, profile_id, mode, state, context_json, created_at, updated_at, completed_at
+        ) VALUES (?, ?, ?, 'active', ?, ?, ?, NULL)
+      `,
+      )
+      .run(
+        assertShortString(input.id, "Discovery session id", 120),
+        assertShortString(input.profileId, "Profile id", 120),
+        ContentModeSchema.parse(input.mode),
+        stringifyJson(input.context ?? {}, "Discovery session context"),
+        now,
+        now,
+      );
+    return this.getRequired<TContext>(input.id);
+  }
+
+  get<TContext = unknown>(id: string): DiscoverySessionRecord<TContext> | null {
+    const row = this.database
+      .prepare("SELECT * FROM discovery_sessions WHERE id = ?")
+      .get(assertShortString(id, "Discovery session id", 120)) as
+      DiscoverySessionRow | undefined;
+    return row === undefined ? null : discoverySessionFromRow<TContext>(row);
+  }
+
+  listForProfile<TContext = unknown>(
+    profileId: string,
+    limit = 50,
+  ): DiscoverySessionRecord<TContext>[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw new DatabaseValidationError(
+        "Discovery session limit must be between 1 and 500.",
+      );
+    }
+    return (
+      this.database
+        .prepare(
+          `
+          SELECT * FROM discovery_sessions
+          WHERE profile_id = ?
+          ORDER BY updated_at DESC, id DESC
+          LIMIT ?
+        `,
+        )
+        .all(
+          assertShortString(profileId, "Profile id", 120),
+          limit,
+        ) as DiscoverySessionRow[]
+    ).map(discoverySessionFromRow<TContext>);
+  }
+
+  appendMessage<TContent = unknown>(
+    input: AppendDiscoveryMessageInput<TContent>,
+  ): DiscoveryMessageRecord<TContent> {
+    return this.database.transaction(() => {
+      const session = this.getRequired(input.sessionId);
+      if (session.state !== "active") {
+        throw new DatabaseValidationError(
+          `Discovery session '${session.id}' is already ${session.state}.`,
+        );
+      }
+      const sessionId = session.id;
+      const ordinal = (
+        this.database
+          .prepare(
+            "SELECT coalesce(max(ordinal), 0) + 1 AS ordinal FROM discovery_messages WHERE session_id = ?",
+          )
+          .get(sessionId) as { ordinal: number }
+      ).ordinal;
+      const createdAt =
+        input.createdAt === undefined
+          ? isoNow(this.clock)
+          : assertIsoTimestamp(input.createdAt, "Message creation time");
+      const requestId =
+        input.requestId === undefined || input.requestId === null
+          ? null
+          : assertShortString(input.requestId, "Request id", 120);
+      this.database
+        .prepare(
+          `
+          INSERT INTO discovery_messages (
+            id, session_id, ordinal, role, content_json, request_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          assertShortString(input.id, "Discovery message id", 120),
+          sessionId,
+          ordinal,
+          input.role,
+          stringifyJson(input.content, "Discovery message content"),
+          requestId,
+          createdAt,
+        );
+      this.database
+        .prepare("UPDATE discovery_sessions SET updated_at = ? WHERE id = ?")
+        .run(createdAt, sessionId);
+      return this.getMessageRequired<TContent>(input.id);
+    })();
+  }
+
+  listMessages<TContent = unknown>(
+    sessionId: string,
+  ): DiscoveryMessageRecord<TContent>[] {
+    this.getRequired(sessionId);
+    return (
+      this.database
+        .prepare(
+          "SELECT * FROM discovery_messages WHERE session_id = ? ORDER BY ordinal",
+        )
+        .all(
+          assertShortString(sessionId, "Discovery session id", 120),
+        ) as DiscoveryMessageRow[]
+    ).map(discoveryMessageFromRow<TContent>);
+  }
+
+  updateContext<TContext>(
+    id: string,
+    context: TContext,
+  ): DiscoverySessionRecord<TContext> {
+    const session = this.getRequired(id);
+    if (session.state !== "active") {
+      throw new DatabaseValidationError(
+        `Discovery session '${session.id}' is already ${session.state}.`,
+      );
+    }
+    this.database
+      .prepare(
+        "UPDATE discovery_sessions SET context_json = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(
+        stringifyJson(context, "Discovery session context"),
+        isoNow(this.clock),
+        session.id,
+      );
+    return this.getRequired<TContext>(session.id);
+  }
+
+  complete(
+    id: string,
+    state: "completed" | "needs-setup" | "failed" = "completed",
+  ): DiscoverySessionRecord {
+    const session = this.getRequired(id);
+    if (session.state !== "active") {
+      if (session.state === state) return session;
+      throw new DatabaseValidationError(
+        `Discovery session '${session.id}' is already ${session.state}.`,
+      );
+    }
+    const completedAt = isoNow(this.clock);
+    this.database
+      .prepare(
+        `
+        UPDATE discovery_sessions
+        SET state = ?, updated_at = ?, completed_at = ?
+        WHERE id = ? AND state = 'active'
+      `,
+      )
+      .run(state, completedAt, completedAt, session.id);
+    return this.getRequired(session.id);
+  }
+
+  private getRequired<TContext = unknown>(
+    id: string,
+  ): DiscoverySessionRecord<TContext> {
+    const session = this.get<TContext>(id);
+    if (session === null) {
+      throw new DatabaseValidationError(
+        `Discovery session '${id}' does not exist.`,
+      );
+    }
+    return session;
+  }
+
+  private getMessageRequired<TContent>(
+    id: string,
+  ): DiscoveryMessageRecord<TContent> {
+    const row = this.database
+      .prepare("SELECT * FROM discovery_messages WHERE id = ?")
+      .get(assertShortString(id, "Discovery message id", 120)) as
+      DiscoveryMessageRow | undefined;
+    if (row === undefined) {
+      throw new DatabaseValidationError(
+        `Discovery message '${id}' does not exist.`,
+      );
+    }
+    return discoveryMessageFromRow<TContent>(row);
+  }
+}
+
+export class IdempotencyRepository {
+  constructor(
+    private readonly database: BetterSqlite3.Database,
+    private readonly clock: Clock,
+  ) {}
+
+  claim<TResponse = unknown>(
+    input: ClaimIdempotencyInput,
+  ): IdempotencyClaim<TResponse> {
+    const ttlSeconds = input.ttlSeconds ?? 86_400;
+    if (
+      !Number.isInteger(ttlSeconds) ||
+      ttlSeconds < 1 ||
+      ttlSeconds > 2_592_000
+    ) {
+      throw new DatabaseValidationError(
+        "Idempotency TTL must be between 1 and 2592000 seconds.",
+      );
+    }
+    const scope = assertShortString(input.scope, "Idempotency scope", 160);
+    const key = this.validateKey(input.key);
+    const requestHash = this.validateRequestHash(input.requestHash);
+
+    return this.database.transaction((): IdempotencyClaim<TResponse> => {
+      const nowDate = this.clock();
+      const now = nowDate.toISOString();
+      let existing = this.get<TResponse>(scope, key);
+      if (
+        existing !== null &&
+        Date.parse(existing.expiresAt) <= nowDate.getTime()
+      ) {
+        this.database
+          .prepare(
+            "DELETE FROM idempotency_records WHERE scope = ? AND key = ?",
+          )
+          .run(scope, key);
+        existing = null;
+      }
+      if (existing !== null) {
+        if (existing.requestHash !== requestHash) {
+          return { status: "conflict", record: existing };
+        }
+        return {
+          status: existing.state === "in-progress" ? "in-progress" : "replay",
+          record: existing,
+        };
+      }
+
+      const expiresAt = new Date(
+        nowDate.getTime() + ttlSeconds * 1_000,
+      ).toISOString();
+      this.database
+        .prepare(
+          `
+          INSERT INTO idempotency_records (
+            scope, key, request_hash, state, response_json, status_code, error_code,
+            created_at, updated_at, expires_at
+          ) VALUES (?, ?, ?, 'in-progress', NULL, NULL, NULL, ?, ?, ?)
+        `,
+        )
+        .run(scope, key, requestHash, now, now, expiresAt);
+      return {
+        status: "claimed",
+        record: this.getRequired<TResponse>(scope, key),
+      };
+    })();
+  }
+
+  get<TResponse = unknown>(
+    scope: string,
+    key: string,
+  ): IdempotencyRecord<TResponse> | null {
+    const row = this.database
+      .prepare("SELECT * FROM idempotency_records WHERE scope = ? AND key = ?")
+      .get(
+        assertShortString(scope, "Idempotency scope", 160),
+        this.validateKey(key),
+      ) as IdempotencyRow | undefined;
+    return row === undefined ? null : idempotencyFromRow<TResponse>(row);
+  }
+
+  complete<TResponse>(
+    input: CompleteIdempotencyInput<TResponse>,
+  ): IdempotencyRecord<TResponse> {
+    return this.finish(input, "completed", null);
+  }
+
+  fail<TResponse>(
+    input: FailIdempotencyInput<TResponse>,
+  ): IdempotencyRecord<TResponse> {
+    return this.finish(
+      input,
+      "failed",
+      assertShortString(input.errorCode, "Idempotency error code", 120),
+    );
+  }
+
+  pruneExpired(): number {
+    return this.database
+      .prepare("DELETE FROM idempotency_records WHERE expires_at <= ?")
+      .run(isoNow(this.clock)).changes;
+  }
+
+  private finish<TResponse>(
+    input: CompleteIdempotencyInput<TResponse>,
+    state: "completed" | "failed",
+    errorCode: string | null,
+  ): IdempotencyRecord<TResponse> {
+    if (
+      !Number.isInteger(input.statusCode) ||
+      input.statusCode < 100 ||
+      input.statusCode > 599
+    ) {
+      throw new DatabaseValidationError(
+        "Idempotency status code must be between 100 and 599.",
+      );
+    }
+    const scope = assertShortString(input.scope, "Idempotency scope", 160);
+    const key = this.validateKey(input.key);
+    const requestHash = this.validateRequestHash(input.requestHash);
+    const updatedAt = isoNow(this.clock);
+    const changes = this.database
+      .prepare(
+        `
+        UPDATE idempotency_records
+        SET state = ?, response_json = ?, status_code = ?, error_code = ?, updated_at = ?
+        WHERE scope = ? AND key = ? AND request_hash = ? AND state = 'in-progress'
+      `,
+      )
+      .run(
+        state,
+        stringifyJson(input.response, "Idempotency response"),
+        input.statusCode,
+        errorCode,
+        updatedAt,
+        scope,
+        key,
+        requestHash,
+      ).changes;
+    if (changes !== 1) {
+      throw new DatabaseValidationError(
+        `Idempotency claim '${scope}/${key}' is missing, completed, or belongs to a different request.`,
+      );
+    }
+    return this.getRequired<TResponse>(scope, key);
+  }
+
+  private getRequired<TResponse>(
+    scope: string,
+    key: string,
+  ): IdempotencyRecord<TResponse> {
+    const record = this.get<TResponse>(scope, key);
+    if (record === null) {
+      throw new DatabaseValidationError(
+        `Idempotency claim '${scope}/${key}' does not exist.`,
+      );
+    }
+    return record;
+  }
+
+  private validateKey(value: string): string {
+    const key = assertShortString(value, "Idempotency key", 120);
+    if (key.length < 8) {
+      throw new DatabaseValidationError(
+        "Idempotency key must contain at least 8 characters.",
+      );
+    }
+    return key;
+  }
+
+  private validateRequestHash(value: string): string {
+    const hash = assertShortString(value, "Idempotency request hash", 128);
+    if (hash.length < 16) {
+      throw new DatabaseValidationError(
+        "Idempotency request hash must contain at least 16 characters.",
+      );
+    }
+    return hash;
   }
 }
 

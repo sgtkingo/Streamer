@@ -24,7 +24,8 @@ empty JSON content type.
     "name": "Viewer",
     "locale": "cs",
     "preferences": ["mystery", "comedy"]
-  }
+  },
+  "localAiEnabled": true
 }
 ```
 
@@ -46,11 +47,17 @@ Discovery request:
 }
 ```
 
-A completed response contains `bestMatch`, `available` and `unavailable`
-groups. Every item is a fully validated canonical `CatalogTitle`. The best
-match is always playable; unavailable and unknown records never receive a Play
-action. The default coordinator returns `mode: "preview"` Home data and an
-explicit preview warning in discovery.
+A completed response contains `mode`, `bestMatch`, `available`, `unavailable`
+and `unverified` groups. `unknown` availability belongs only in `unverified`;
+it is never silently reported as factual unavailability. Live responses also
+require metadata, rating and availability provenance. The best match is always
+playable. The default coordinator returns `mode: "preview"`, an explicit
+warning, and no Play action.
+
+Sessions and messages are durable SQLite records. `idempotencyKey` is scoped to
+the profile: replaying the same body returns the stored response, while reusing
+the key for different input returns `IDEMPOTENCY_CONFLICT`. A supplied unknown
+or closed `sessionId` returns `DISCOVERY_SESSION_NOT_FOUND`.
 
 ## Library, History and playback
 
@@ -60,19 +67,30 @@ explicit preview warning in discovery.
 | `PUT` | `/profiles/:profileId/library/:titleId` | Explicitly save a validated title. |
 | `DELETE` | `/profiles/:profileId/library/:titleId` | Remove Library membership. |
 | `GET` | `/profiles/:profileId/history` | List newest playback events. |
+| `DELETE` | `/profiles/:profileId/history/:eventId` | Remove one history event. |
+| `POST` | `/profiles/:profileId/history/clear` | Clear history after an explicit confirmation token. |
 | `POST` | `/profiles/:profileId/playback/start` | Verify playability, add to Library and append History. |
+| `GET` | `/playback/grants/:grantId` | Resolve an unexpired in-memory playback ticket. |
+| `DELETE` | `/playback/grants/:grantId` | Stop/revoke the active ticket. |
 
 Playback body:
 
 ```json
 {
-  "titleId": "sai:preview:lake-house"
+  "titleId": "sai:canonical:title-id"
 }
 ```
 
-`PUT` and `DELETE` have no request body. Unknown titles return
-`TITLE_NOT_FOUND`; known titles without a verified playable variant return
-`TITLE_NOT_PLAYABLE` from playback start.
+Playback is disabled in preview mode. A live coordinator must recheck the media
+variant and return a future-expiring grant before Library or History changes.
+Webshare direct URLs are retained only by the in-memory ticket store; the
+browser receives `/api/v1/playback/grants/:grantId`. Issuing a new grant revokes
+the previous one. Unknown titles return `TITLE_NOT_FOUND`; unavailable titles
+return `TITLE_NOT_PLAYABLE`; missing live media composition returns
+`PLAYBACK_NOT_CONFIGURED`.
+
+History clear accepts `{ "confirmationToken": "clear-history" }`. Clearing
+History never removes Library membership.
 
 ## TMDB connection
 
@@ -80,6 +98,7 @@ Playback body:
 | --- | --- | --- |
 | `POST` | `/integrations/tmdb/check` | Verify a read token without saving it. |
 | `POST` | `/integrations/tmdb/connect` | Verify, then save through `SecretStore`. |
+| `DELETE` | `/integrations/tmdb` | Delete the token and disable the connection. |
 
 Both accept `{ "token": "..." }`. Public responses are an allow-listed shape:
 
@@ -97,6 +116,18 @@ No response contains the token, an internal secret reference, upstream body or
 sensitive header. Expected failure codes include `CREDENTIAL_REQUIRED`,
 `CREDENTIAL_REJECTED`, `RATE_LIMITED`, `TIMEOUT`, `INVALID_RESPONSE`,
 `PROVIDER_UNAVAILABLE` and `SECURE_STORAGE_UNAVAILABLE`.
+
+## Integration preparation boundaries
+
+- `POST /inference/detect` runs the bounded Ollama version, installed-model,
+  metadata, structured-output, tool-call and residency checks. It does not
+  expose an arbitrary inference proxy.
+- The TMDB transport and normalized `MetadataProvider` adapter are implemented,
+  but live discovery remains disabled until a live coordinator is explicitly
+  composed.
+- The Webshare transport and normalized `MediaProvider` adapter are implemented.
+  Automated login and the real-account playback/Range capability spike remain
+  release gates; no endpoint accepts an unverified WST and marks it connected.
 
 ## Versioning rules
 

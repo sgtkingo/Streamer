@@ -175,6 +175,68 @@ export const MIGRATIONS: readonly Migration[] = [
         ON watch_history_events (profile_id, occurred_at DESC, id DESC);
     `,
   },
+  {
+    version: 5,
+    name: "durable_discovery_sessions_and_idempotency",
+    sql: `
+      CREATE TABLE discovery_sessions (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 120),
+        profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        mode TEXT NOT NULL CHECK (mode IN ('live', 'preview')),
+        state TEXT NOT NULL CHECK (state IN ('active', 'completed', 'needs-setup', 'failed')),
+        context_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(context_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        CHECK (
+          (state = 'active' AND completed_at IS NULL)
+          OR (state <> 'active' AND completed_at IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX discovery_sessions_profile_time_idx
+        ON discovery_sessions (profile_id, updated_at DESC, id DESC);
+
+      CREATE TABLE discovery_messages (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 120),
+        session_id TEXT NOT NULL REFERENCES discovery_sessions(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
+        role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool')),
+        content_json TEXT NOT NULL CHECK (json_valid(content_json)),
+        request_id TEXT CHECK (request_id IS NULL OR length(request_id) BETWEEN 1 AND 120),
+        created_at TEXT NOT NULL,
+        UNIQUE (session_id, ordinal)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX discovery_messages_request_role_idx
+        ON discovery_messages (session_id, request_id, role)
+        WHERE request_id IS NOT NULL;
+
+      CREATE INDEX discovery_messages_session_order_idx
+        ON discovery_messages (session_id, ordinal);
+
+      CREATE TABLE idempotency_records (
+        scope TEXT NOT NULL CHECK (length(scope) BETWEEN 1 AND 160),
+        key TEXT NOT NULL CHECK (length(key) BETWEEN 8 AND 120),
+        request_hash TEXT NOT NULL CHECK (length(request_hash) BETWEEN 16 AND 128),
+        state TEXT NOT NULL CHECK (state IN ('in-progress', 'completed', 'failed')),
+        response_json TEXT CHECK (response_json IS NULL OR json_valid(response_json)),
+        status_code INTEGER CHECK (status_code IS NULL OR status_code BETWEEN 100 AND 599),
+        error_code TEXT CHECK (error_code IS NULL OR length(error_code) BETWEEN 1 AND 120),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        PRIMARY KEY (scope, key),
+        CHECK (
+          (state = 'in-progress' AND response_json IS NULL AND status_code IS NULL AND error_code IS NULL)
+          OR (state = 'completed' AND response_json IS NOT NULL AND status_code IS NOT NULL AND error_code IS NULL)
+          OR (state = 'failed' AND response_json IS NOT NULL AND status_code IS NOT NULL AND error_code IS NOT NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX idempotency_records_expiry_idx ON idempotency_records (expires_at);
+    `,
+  },
 ] as const;
 
 export function applyMigrations(

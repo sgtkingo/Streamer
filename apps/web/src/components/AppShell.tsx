@@ -13,9 +13,11 @@ function routeFromLocation(): Route {
 export function AppShell({
   api,
   viewerName = "Viewer",
+  playbackEnabled = false,
 }: {
   api: StreamerApi;
   viewerName?: string;
+  playbackEnabled?: boolean;
 }) {
   const [route, setRoute] = useState<Route>(routeFromLocation);
   const [libraryVersion, setLibraryVersion] = useState(0);
@@ -48,6 +50,7 @@ export function AppShell({
           <button
             type="button"
             className={route === "home" ? "is-active" : ""}
+            aria-current={route === "home" ? "page" : undefined}
             onClick={() => navigate("home")}
           >
             Home
@@ -55,6 +58,7 @@ export function AppShell({
           <button
             type="button"
             className={route === "library" ? "is-active" : ""}
+            aria-current={route === "library" ? "page" : undefined}
             onClick={() => navigate("library")}
           >
             Library
@@ -69,13 +73,13 @@ export function AppShell({
             <a href="#for-you">For You</a>
           </nav>
         )}
-        <button
+        <span
           className="avatar"
-          type="button"
-          aria-label={`Open profile menu for ${viewerName}`}
+          role="img"
+          aria-label={`Current profile: ${viewerName}`}
         >
           {viewerName.slice(0, 1).toUpperCase()}
-        </button>
+        </span>
       </header>
 
       {route === "home" ? (
@@ -90,6 +94,7 @@ export function AppShell({
           profileId={profileId}
           version={libraryVersion}
           onBackHome={() => navigate("home")}
+          playbackEnabled={playbackEnabled}
         />
       )}
     </div>

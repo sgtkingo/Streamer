@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { LocalAiResult, StreamerApi } from "../../api/client";
 import { safeErrorMessage } from "../../api/client";
 import { StatusBadge, type UiStatus } from "./StatusBadge";
@@ -21,7 +21,7 @@ export function LocalAiStep({
   );
   const hasDetected = useRef(false);
 
-  const detect = async () => {
+  const detect = useCallback(async () => {
     setStatus("working");
     setMessage("Looking for Ollama and a compatible model…");
     try {
@@ -39,14 +39,14 @@ export function LocalAiStep({
       setStatus("error");
       setMessage(safeErrorMessage(error));
     }
-  };
+  }, [api, onEnabledChange]);
 
   useEffect(() => {
     if (!hasDetected.current) {
       hasDetected.current = true;
       void detect();
     }
-  }, []);
+  }, [detect]);
 
   return (
     <div className="step-copy">

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CatalogTitle,
   DiscoveryResponse,
   HomeFeed,
 } from "@streamer-ai/contracts";
-import type { StreamerApi } from "../api/client";
+import type { PlaybackGrant, StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
 import { TitleCard } from "./TitleCard";
 
@@ -22,27 +22,74 @@ const stageLabels = [
   "Ranking verified matches",
 ];
 
+type DiscoveryUiResponse = DiscoveryResponse;
+
+interface PendingAction {
+  titleId: string;
+  kind: "play" | "add";
+}
+
+interface ReadyPlayback {
+  title: string;
+  grant: PlaybackGrant;
+}
+
+interface ConversationTurn {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+}
+
 export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
   const [feed, setFeed] = useState<HomeFeed | null>(null);
   const [query, setQuery] = useState("");
-  const [result, setResult] = useState<DiscoveryResponse | null>(null);
+  const [result, setResult] = useState<DiscoveryUiResponse | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [isLoadingFeed, setIsLoadingFeed] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [announcement, setAnnouncement] = useState("");
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(
+    null,
+  );
+  const [readyPlayback, setReadyPlayback] = useState<ReadyPlayback | null>(
+    null,
+  );
+  const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const requestCounter = useRef(0);
+  const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
 
-  const loadHome = async () => {
+  const loadHome = useCallback(async () => {
     try {
       setFeed(await api.getHome(profileId));
       setError("");
     } catch (loadError) {
       setError(safeErrorMessage(loadError));
+    } finally {
+      setIsLoadingFeed(false);
     }
-  };
+  }, [api, profileId]);
 
   useEffect(() => {
     void loadHome();
-  }, [api, profileId]);
+  }, [loadHome]);
+
+  useEffect(() => {
+    if (!feed || !window.location.hash) return;
+    const target = document.getElementById(
+      decodeURIComponent(window.location.hash.slice(1)),
+    );
+    target?.scrollIntoView({ block: "start" });
+  }, [feed]);
+
+  useEffect(() => {
+    if (!result) return;
+    const count = discoveryTitles(result).length;
+    setAnnouncement(
+      `${count} validated ${count === 1 ? "title" : "titles"} ready.`,
+    );
+    resultsHeadingRef.current?.focus();
+  }, [result]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -51,6 +98,8 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
     setIsSearching(true);
     setError("");
     setNotice("");
+    setReadyPlayback(null);
+    setAnnouncement("StreamerAI is finding and validating titles.");
     try {
       const response = await api.discover({
         profileId,
@@ -58,7 +107,20 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
         sessionId: result?.sessionId,
         idempotencyKey: `${Date.now()}-${++requestCounter.current}`,
       });
-      setResult(response);
+      setResult(response as DiscoveryUiResponse);
+      setTurns((current) => [
+        ...current,
+        {
+          id: `${response.sessionId}-user-${requestCounter.current}`,
+          role: "user",
+          text: message,
+        },
+        {
+          id: `${response.sessionId}-assistant-${requestCounter.current}`,
+          role: "assistant",
+          text: response.reply,
+        },
+      ]);
       setQuery("");
     } catch (searchError) {
       setError(safeErrorMessage(searchError));
@@ -68,6 +130,9 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
   };
 
   const add = async (item: CatalogTitle) => {
+    if (pendingAction) return;
+    setPendingAction({ titleId: item.id, kind: "add" });
+    setError("");
     try {
       await api.addToLibrary(profileId, item.id);
       setNotice(`${item.title} was added to your Library.`);
@@ -78,15 +143,20 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
       );
     } catch (actionError) {
       setError(safeErrorMessage(actionError));
+    } finally {
+      setPendingAction(null);
     }
   };
 
   const play = async (item: CatalogTitle) => {
+    if (pendingAction) return;
+    setPendingAction({ titleId: item.id, kind: "play" });
+    setError("");
+    setReadyPlayback(null);
     try {
-      await api.startPlayback(profileId, item.id);
-      setNotice(
-        `${item.title} passed the playback preflight and was added to your Library.`,
-      );
+      const response = await api.startPlayback(profileId, item.id);
+      setReadyPlayback({ title: item.title, grant: response.playback });
+      setNotice(`${item.title} is ready from the verified streaming source.`);
       onLibraryChanged();
       await loadHome();
       setResult((current) =>
@@ -94,8 +164,24 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
       );
     } catch (actionError) {
       setError(safeErrorMessage(actionError));
+    } finally {
+      setPendingAction(null);
     }
   };
+
+  const pendingFor = (item: CatalogTitle) =>
+    pendingAction?.titleId === item.id ? pendingAction.kind : undefined;
+
+  const resultMode = result?.mode ?? "preview";
+  const availableResults =
+    result?.available.filter((item) =>
+      ["available", "partial"].includes(item.title.availability),
+    ) ?? [];
+  const unavailableResults =
+    result?.unavailable.filter(
+      (item) => item.title.availability === "unavailable",
+    ) ?? [];
+  const unknownResults = result?.unverified ?? [];
 
   return (
     <main id="home" className="home-page">
@@ -164,6 +250,9 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
           ))}
         </section>
       )}
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </p>
       {error && (
         <p className="page-message page-message--error" role="alert">
           {error}
@@ -172,6 +261,21 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
       {notice && (
         <p className="page-message" role="status">
           {notice}
+          {readyPlayback && (
+            <>
+              {" "}
+              <a
+                href={readyPlayback.grant.url}
+                rel="noreferrer"
+                className="playback-link"
+              >
+                Open stream
+              </a>
+              <small>
+                Link expires {formatExpiry(readyPlayback.grant.expiresAt)}.
+              </small>
+            </>
+          )}
         </p>
       )}
 
@@ -183,10 +287,26 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
           <div className="section-heading">
             <div>
               <p className="eyebrow">StreamerAI answer</p>
-              <h2 id="results-heading">A considered shortlist</h2>
+              <h2 id="results-heading" ref={resultsHeadingRef} tabIndex={-1}>
+                A considered shortlist
+              </h2>
             </div>
             <p>{result.reply}</p>
           </div>
+          <ol
+            className="conversation-thread"
+            aria-label="Discovery conversation"
+          >
+            {turns.map((turn) => (
+              <li
+                key={turn.id}
+                className={`conversation-turn conversation-turn--${turn.role}`}
+              >
+                <span>{turn.role === "user" ? "You" : "StreamerAI"}</span>
+                <p>{turn.text}</p>
+              </li>
+            ))}
+          </ol>
           {result.warnings.map((warning) => (
             <p className="preview-notice" key={warning}>
               {warning}
@@ -199,35 +319,63 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
               hero
               onPlay={play}
               onAdd={add}
+              playbackEnabled={resultMode === "live"}
+              pendingAction={pendingFor(result.bestMatch.title)}
             />
           )}
-          {result.available.length > 0 && (
+          {availableResults.length > 0 && (
             <div className="result-group">
               <h3>Available to stream</h3>
               <div className="title-grid">
-                {result.available.map(({ title, reason }) => (
+                {availableResults.map(({ title, reason }) => (
                   <TitleCard
                     key={title.id}
                     item={title}
                     reason={reason}
                     onPlay={play}
                     onAdd={add}
+                    playbackEnabled={resultMode === "live"}
+                    pendingAction={pendingFor(title)}
                   />
                 ))}
               </div>
             </div>
           )}
-          {result.unavailable.length > 0 && (
+          {unavailableResults.length > 0 && (
             <div className="result-group result-group--unavailable">
               <h3>Found, not currently available</h3>
               <div className="title-grid">
-                {result.unavailable.map(({ title, reason }) => (
+                {unavailableResults.map(({ title, reason }) => (
                   <TitleCard
                     key={title.id}
                     item={title}
                     reason={reason}
                     onPlay={play}
                     onAdd={add}
+                    playbackEnabled={false}
+                    pendingAction={pendingFor(title)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          {unknownResults.length > 0 && (
+            <div className="result-group result-group--unknown">
+              <h3>Found, availability not checked</h3>
+              <p className="result-group__description">
+                These titles are valid database matches, but the streaming
+                source did not return a definitive result.
+              </p>
+              <div className="title-grid">
+                {unknownResults.map(({ title, reason }) => (
+                  <TitleCard
+                    key={title.id}
+                    item={title}
+                    reason={reason}
+                    onPlay={play}
+                    onAdd={add}
+                    playbackEnabled={false}
+                    pendingAction={pendingFor(title)}
                   />
                 ))}
               </div>
@@ -240,6 +388,11 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
         <p className="preview-notice">
           Preview data is active. Live metadata, ratings and availability
           replace it after provider setup.
+        </p>
+      )}
+      {isLoadingFeed && (
+        <p className="empty-inline" role="status">
+          Loading your Home sections…
         </p>
       )}
       <div className="home-sections">
@@ -267,6 +420,8 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     item={item}
                     onPlay={play}
                     onAdd={add}
+                    playbackEnabled={feed.mode === "live"}
+                    pendingAction={pendingFor(item)}
                   />
                 ))}
               </div>
@@ -284,9 +439,9 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
 }
 
 function markInLibrary(
-  result: DiscoveryResponse,
+  result: DiscoveryUiResponse,
   titleId: string,
-): DiscoveryResponse {
+): DiscoveryUiResponse {
   const update = <T extends { title: CatalogTitle }>(item: T): T =>
     item.title.id === titleId
       ? { ...item, title: { ...item.title, inLibrary: true } }
@@ -296,5 +451,23 @@ function markInLibrary(
     bestMatch: result.bestMatch ? update(result.bestMatch) : null,
     available: result.available.map(update),
     unavailable: result.unavailable.map(update),
+    unverified: result.unverified.map(update),
   };
+}
+
+function discoveryTitles(result: DiscoveryUiResponse): CatalogTitle[] {
+  const titles = [
+    ...(result.bestMatch ? [result.bestMatch.title] : []),
+    ...result.available.map((item) => item.title),
+    ...result.unavailable.map((item) => item.title),
+    ...result.unverified.map((item) => item.title),
+  ];
+  return [...new Map(titles.map((title) => [title.id, title])).values()];
+}
+
+function formatExpiry(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "soon"
+    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }

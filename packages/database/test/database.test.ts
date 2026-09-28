@@ -209,3 +209,63 @@ describe("on-demand catalog, Library and History", () => {
     ]);
   });
 });
+
+describe("durable discovery", () => {
+  it("persists ordered conversation turns and enforces idempotent request ownership", () => {
+    const { database } = createDatabase();
+    database.profiles.create({ id: "profile-1", name: "Alex", locale: "cs" });
+    database.discoverySessions.create({
+      id: "session-1",
+      profileId: "profile-1",
+      mode: "preview",
+      context: { intent: "autumn" },
+    });
+    database.discoverySessions.appendMessage({
+      id: "message-1",
+      sessionId: "session-1",
+      role: "user",
+      content: { message: "Podzimní film" },
+      requestId: "request-0001",
+    });
+    database.discoverySessions.appendMessage({
+      id: "message-2",
+      sessionId: "session-1",
+      role: "assistant",
+      content: { reply: "Mám několik tipů." },
+      requestId: "request-0001",
+    });
+
+    expect(database.discoverySessions.listMessages("session-1")).toMatchObject([
+      { ordinal: 1, role: "user" },
+      { ordinal: 2, role: "assistant" },
+    ]);
+
+    const claim = database.idempotency.claim<{ ok: boolean }>({
+      scope: "discovery:profile-1",
+      key: "request-0001",
+      requestHash: "0123456789abcdef0123456789abcdef",
+    });
+    expect(claim.status).toBe("claimed");
+    database.idempotency.complete({
+      scope: "discovery:profile-1",
+      key: "request-0001",
+      requestHash: "0123456789abcdef0123456789abcdef",
+      response: { ok: true },
+      statusCode: 200,
+    });
+    expect(
+      database.idempotency.claim<{ ok: boolean }>({
+        scope: "discovery:profile-1",
+        key: "request-0001",
+        requestHash: "0123456789abcdef0123456789abcdef",
+      }),
+    ).toMatchObject({ status: "replay", record: { response: { ok: true } } });
+    expect(
+      database.idempotency.claim({
+        scope: "discovery:profile-1",
+        key: "request-0001",
+        requestHash: "ffffffffffffffffffffffffffffffff",
+      }).status,
+    ).toBe("conflict");
+  });
+});

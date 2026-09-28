@@ -33,6 +33,8 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
     preferences: [],
   });
   const [tmdbState, setTmdbState] = useState<ConnectionState>("not-configured");
+  const [webshareState, setWebshareState] =
+    useState<ConnectionState>("not-configured");
   const [localAiEnabled, setLocalAiEnabled] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
   const [finishError, setFinishError] = useState("");
@@ -45,6 +47,7 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
       .then((status) => {
         if (active) {
           setTmdbState(status.tmdb);
+          setWebshareState(status.webshare);
           if (status.localAi === "connected") setLocalAiEnabled(true);
         }
       })
@@ -75,7 +78,6 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
         profile: { ...profile, name: profile.name.trim() || "Viewer" },
         localAiEnabled,
       });
-      window.localStorage.setItem("streamer-ai:onboarding-complete", "true");
       onComplete(profile);
     } catch (error) {
       setFinishError(safeErrorMessage(error));
@@ -124,9 +126,9 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
             ))}
           </ol>
           <p className="progress-privacy">
-            Encrypted locally
+            Home-server setup
             <br />
-            No tracking
+            No browser secrets
           </p>
         </aside>
 
@@ -139,6 +141,7 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
             <ConnectionsStep
               api={api}
               initialTmdbState={tmdbState}
+              initialWebshareState={webshareState}
               onTmdbConnected={() => setTmdbState("connected")}
             />
           )}

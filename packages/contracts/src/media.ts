@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { FieldProvenanceSchema } from "./provider-common.js";
+
 export const MEDIA_KINDS = ["movie", "series"] as const;
 export const MediaKindSchema = z.enum(MEDIA_KINDS);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
@@ -13,14 +15,29 @@ export const AVAILABILITY_STATES = [
 export const AvailabilityStateSchema = z.enum(AVAILABILITY_STATES);
 export type AvailabilityState = z.infer<typeof AvailabilityStateSchema>;
 
+export const CONTENT_MODES = ["live", "preview"] as const;
+export const ContentModeSchema = z.enum(CONTENT_MODES);
+export type ContentMode = z.infer<typeof ContentModeSchema>;
+
 export const SourceRatingSchema = z
   .object({
     source: z.string().trim().min(1).max(60),
     value: z.number().min(0),
     scale: z.number().positive(),
     votes: z.number().int().nonnegative().nullable(),
+    /** Required for live provider results; optional only for explicit preview fixtures. */
+    provenance: FieldProvenanceSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((rating, context) => {
+    if (rating.value > rating.scale) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["value"],
+        message: "Rating value cannot exceed its declared scale.",
+      });
+    }
+  });
 export type SourceRating = z.infer<typeof SourceRatingSchema>;
 
 export const MediaFormatSchema = z
@@ -92,6 +109,9 @@ export const CatalogTitleSchema = z
     seriesCoverage: SeriesCoverageSchema.nullable(),
     metadataProvider: z.string().trim().min(1).max(80),
     metadataValidatedAt: z.string().datetime({ offset: true }),
+    /** Rich provenance is mandatory when a containing response is in live mode. */
+    metadataProvenance: FieldProvenanceSchema.optional(),
+    availabilityProvenance: FieldProvenanceSchema.optional(),
     inLibrary: z.boolean(),
     progressPercent: z.number().min(0).max(100).nullable(),
   })
@@ -103,14 +123,132 @@ export const CatalogTitleSchema = z
         message: "Movies cannot contain series coverage.",
       });
     }
-    if (title.availability === "available" && title.formats.length === 0) {
+    if (title.kind === "movie" && title.availability === "partial") {
       context.addIssue({
         code: z.ZodIssueCode.custom,
+        path: ["availability"],
+        message: "Movies cannot have partial series availability.",
+      });
+    }
+    const streamable = ["available", "partial"].includes(title.availability);
+    if (streamable && title.formats.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["formats"],
         message: "Available titles require at least one verified format.",
+      });
+    }
+    if (!streamable && title.formats.length > 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["formats"],
+        message: "Unplayable titles cannot expose playable formats.",
+      });
+    }
+    const hasProvider = title.availabilityProvider !== null;
+    const hasCheckedAt = title.availabilityCheckedAt !== null;
+    if (hasProvider !== hasCheckedAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["availabilityCheckedAt"],
+        message:
+          "Availability provider and check timestamp must be present together.",
+      });
+    }
+    if (title.availability !== "unknown" && (!hasProvider || !hasCheckedAt)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["availabilityProvider"],
+        message:
+          "Known availability requires provider provenance and a timestamp.",
+      });
+    }
+    if (title.kind === "series") {
+      if (streamable && title.seriesCoverage === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["seriesCoverage"],
+          message: "Streamable series require verified episode coverage.",
+        });
+      }
+      if (
+        title.availability === "available" &&
+        title.seriesCoverage !== null &&
+        !title.seriesCoverage.complete
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["availability"],
+          message: "Incomplete series coverage must be marked partial.",
+        });
+      }
+      if (
+        title.availability === "partial" &&
+        (title.seriesCoverage === null ||
+          title.seriesCoverage.complete ||
+          title.seriesCoverage.episodesAvailable === 0)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["seriesCoverage"],
+          message:
+            "Partial series availability requires verified, incomplete playable coverage.",
+        });
+      }
+    }
+    if (
+      title.metadataProvenance !== undefined &&
+      title.metadataProvenance.providerId !== title.metadataProvider
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["metadataProvenance", "providerId"],
+        message: "Metadata provenance must identify the metadata provider.",
+      });
+    }
+    if (
+      title.availabilityProvenance !== undefined &&
+      title.availabilityProvider !== title.availabilityProvenance.providerId
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["availabilityProvenance", "providerId"],
+        message:
+          "Availability provenance must identify the availability provider.",
       });
     }
   });
 export type CatalogTitle = z.infer<typeof CatalogTitleSchema>;
+
+function addMissingLiveProvenanceIssues(
+  title: CatalogTitle,
+  context: z.RefinementCtx,
+  path: Array<string | number>,
+): void {
+  if (title.metadataProvenance === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...path, "metadataProvenance"],
+      message: "Live metadata requires complete field provenance.",
+    });
+  }
+  if (title.availabilityProvenance === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...path, "availabilityProvenance"],
+      message: "Live availability requires complete field provenance.",
+    });
+  }
+  for (const [ratingIndex, rating] of title.ratings.entries()) {
+    if (rating.provenance === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...path, "ratings", ratingIndex, "provenance"],
+        message: "Live ratings require independent source provenance.",
+      });
+    }
+  }
+}
 
 export const HOME_SECTION_IDS = [
   "continue-watching",
@@ -136,11 +274,24 @@ export type HomeSection = z.infer<typeof HomeSectionSchema>;
 export const HomeFeedSchema = z
   .object({
     profileId: z.string().trim().min(1).max(120),
-    mode: z.enum(["live", "preview"]),
+    mode: ContentModeSchema,
     generatedAt: z.string().datetime({ offset: true }),
     sections: z.array(HomeSectionSchema).max(HOME_SECTION_IDS.length),
   })
-  .strict();
+  .strict()
+  .superRefine((feed, context) => {
+    if (feed.mode !== "live") return;
+    for (const [sectionIndex, section] of feed.sections.entries()) {
+      for (const [itemIndex, item] of section.items.entries()) {
+        addMissingLiveProvenanceIssues(item, context, [
+          "sections",
+          sectionIndex,
+          "items",
+          itemIndex,
+        ]);
+      }
+    }
+  });
 export type HomeFeed = z.infer<typeof HomeFeedSchema>;
 
 export const DISCOVERY_STAGES = [
@@ -177,11 +328,13 @@ export type RankedTitle = z.infer<typeof RankedTitleSchema>;
 export const DiscoveryResponseSchema = z
   .object({
     sessionId: z.string().trim().min(1).max(120),
+    mode: ContentModeSchema,
     stage: DiscoveryStageSchema,
     reply: z.string().trim().min(1).max(1_000),
     bestMatch: RankedTitleSchema.nullable(),
     available: z.array(RankedTitleSchema).max(30),
     unavailable: z.array(RankedTitleSchema).max(30),
+    unverified: z.array(RankedTitleSchema).max(30),
     warnings: z.array(z.string().trim().min(1).max(240)).max(20),
     completedAt: z.string().datetime({ offset: true }).nullable(),
   })
@@ -196,16 +349,102 @@ export const DiscoveryResponseSchema = z
         message: "The best match must be streamable.",
       });
     }
+    for (const [index, item] of result.available.entries()) {
+      if (!["available", "partial"].includes(item.title.availability)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["available", index, "title", "availability"],
+          message: "Available results must be deterministically streamable.",
+        });
+      }
+    }
+    for (const [index, item] of result.unavailable.entries()) {
+      if (item.title.availability !== "unavailable") {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["unavailable", index, "title", "availability"],
+          message: "Unavailable results must have confirmed unavailability.",
+        });
+      }
+    }
+    for (const [index, item] of result.unverified.entries()) {
+      if (item.title.availability !== "unknown") {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["unverified", index, "title", "availability"],
+          message: "Unverified results must require an availability recheck.",
+        });
+      }
+    }
     const ids = [
       ...(result.bestMatch === null ? [] : [result.bestMatch.title.id]),
       ...result.available.map((item) => item.title.id),
       ...result.unavailable.map((item) => item.title.id),
+      ...result.unverified.map((item) => item.title.id),
     ];
     if (new Set(ids).size !== ids.length) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Discovery groups cannot contain duplicates.",
       });
+    }
+    const ranked = [
+      ...(result.bestMatch === null ? [] : [result.bestMatch]),
+      ...result.available,
+      ...result.unavailable,
+      ...result.unverified,
+    ];
+    for (const [index, item] of ranked.entries()) {
+      if (item.title.matchPercent === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["ranking", index, "title", "matchPercent"],
+          message: "Discovery results require an explicit match percentage.",
+        });
+      }
+    }
+    if (result.bestMatch === null && result.available.length > 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["bestMatch"],
+        message:
+          "A completed response with streamable candidates requires a best match.",
+      });
+    }
+    if (result.bestMatch !== null) {
+      const bestScore = result.bestMatch.title.matchPercent;
+      const competingScores = [
+        ...result.available,
+        ...result.unavailable,
+        ...result.unverified,
+      ].flatMap((item) =>
+        item.title.matchPercent === null ? [] : [item.title.matchPercent],
+      );
+      if (
+        bestScore !== null &&
+        competingScores.some((score) => score > bestScore)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["bestMatch", "title", "matchPercent"],
+          message: "The best match must have the highest ranking score.",
+        });
+      }
+    }
+    const terminal = ["completed", "needs-setup", "failed"].includes(
+      result.stage,
+    );
+    if (terminal !== (result.completedAt !== null)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["completedAt"],
+        message: "Only terminal discovery stages have a completion timestamp.",
+      });
+    }
+    if (result.mode === "live") {
+      for (const [index, item] of ranked.entries()) {
+        addMissingLiveProvenanceIssues(item.title, context, ["ranking", index]);
+      }
     }
   });
 export type DiscoveryResponse = z.infer<typeof DiscoveryResponseSchema>;
@@ -253,38 +492,3 @@ export const HistoryResponseSchema = z
   })
   .strict();
 export type HistoryResponse = z.infer<typeof HistoryResponseSchema>;
-
-/** Provider-neutral boundaries. Concrete TMDB, Webshare or future adapters implement these contracts. */
-export interface MetadataProvider {
-  readonly id: string;
-  getHomeFeed(profileId: string): Promise<HomeFeed>;
-}
-
-export interface MediaProvider {
-  readonly id: string;
-  recheck(
-    titleId: string,
-  ): Promise<
-    Pick<CatalogTitle, "availability" | "availabilityCheckedAt" | "formats">
-  >;
-}
-
-export interface SubtitleProvider {
-  readonly id: string;
-  readonly enabled: boolean;
-}
-
-export interface SearchProvider {
-  readonly id: string;
-  readonly enabled: boolean;
-}
-
-export interface AgentProvider {
-  readonly id: string;
-  discover(request: DiscoveryRequest): Promise<DiscoveryResponse>;
-}
-
-export interface SyncProvider {
-  readonly id: string;
-  readonly enabled: boolean;
-}

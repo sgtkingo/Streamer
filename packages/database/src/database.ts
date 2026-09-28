@@ -3,7 +3,9 @@ import BetterSqlite3 from "better-sqlite3";
 import { applyMigrations } from "./migrations.js";
 import {
   CatalogTitlesRepository,
+  DiscoverySessionsRepository,
   HistoryRepository,
+  IdempotencyRepository,
   IntegrationsRepository,
   JobsRepository,
   LibraryRepository,
@@ -26,6 +28,8 @@ export class StreamerDatabase {
   readonly titles: CatalogTitlesRepository;
   readonly library: LibraryRepository;
   readonly history: HistoryRepository;
+  readonly discoverySessions: DiscoverySessionsRepository;
+  readonly idempotency: IdempotencyRepository;
   readonly jobs: JobsRepository;
   readonly syncOutbox: SyncOutboxRepository;
 
@@ -41,6 +45,8 @@ export class StreamerDatabase {
     this.titles = new CatalogTitlesRepository(connection, clock);
     this.library = new LibraryRepository(connection, clock);
     this.history = new HistoryRepository(connection, clock);
+    this.discoverySessions = new DiscoverySessionsRepository(connection, clock);
+    this.idempotency = new IdempotencyRepository(connection, clock);
     this.jobs = new JobsRepository(connection, clock);
     this.syncOutbox = new SyncOutboxRepository(connection, clock);
   }

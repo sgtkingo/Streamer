@@ -8,15 +8,21 @@ import type {
   IntegrationConnectionResult,
   PublicIntegrationErrorCode,
   SetupProfile,
+  PlaybackGrant as PlaybackGrantContract,
 } from "@streamer-ai/contracts";
 
 export type ConnectionState = "connected" | "not-configured" | "unavailable";
+export type { PlaybackGrant } from "@streamer-ai/contracts";
 export type ProfileDraft = SetupProfile;
 export type ConnectionResult = IntegrationConnectionResult;
 
 export interface SetupStatus {
+  complete: boolean;
   tmdb: ConnectionState;
+  webshare: ConnectionState;
   localAi: ConnectionState;
+  playback: boolean;
+  profile?: ProfileDraft;
 }
 
 export interface LocalAiResult {
@@ -24,6 +30,13 @@ export interface LocalAiResult {
   message: string;
   model?: string;
   runtime?: string;
+}
+
+export interface PlaybackStartResult {
+  ok: true;
+  eventId: string;
+  library: LibraryResponse;
+  playback: PlaybackGrantContract;
 }
 
 export interface StreamerApi {
@@ -37,20 +50,54 @@ export interface StreamerApi {
   addToLibrary(profileId: string, titleId: string): Promise<LibraryResponse>;
   removeFromLibrary(profileId: string, titleId: string): Promise<void>;
   getHistory(profileId: string): Promise<HistoryResponse>;
+  removeHistoryEvent(profileId: string, eventId: string): Promise<void>;
+  clearHistory(profileId: string): Promise<void>;
   startPlayback(
     profileId: string,
     titleId: string,
-  ): Promise<{ ok: true; eventId: string; library: LibraryResponse }>;
+  ): Promise<PlaybackStartResult>;
 }
 
 class ApiError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+const domainErrorMessages: Record<string, string> = {
+  TITLE_NOT_FOUND:
+    "This title is no longer in the validated local cache. Search for it again.",
+  TITLE_NOT_PLAYABLE:
+    "No verified playable version is available for this title right now.",
+  PLAYBACK_NOT_CONFIGURED:
+    "Connect a streaming source before starting playback.",
+  PLAYBACK_RECHECK_FAILED:
+    "The streaming source could not verify this title. Try again in a moment.",
+  PROFILE_NOT_FOUND:
+    "This profile is not available. Finish setup or choose another profile.",
+  HISTORY_EVENT_NOT_FOUND: "That history item no longer exists.",
+  IDEMPOTENCY_CONFLICT:
+    "This request conflicts with an earlier discovery request. Please send it again.",
+  DISCOVERY_SESSION_NOT_FOUND:
+    "This conversation has expired. Start a new discovery request.",
+  INTEGRATION_NOT_CONFIGURED:
+    "Finish configuring the required integration and try again.",
+  INVALID_REQUEST:
+    "Some information is missing or invalid. Check it and try again.",
+  RATE_LIMITED: "The provider is busy. Wait a moment and try again.",
+};
+
+async function readPublicErrorCode(
+  response: Response,
+): Promise<string | undefined> {
+  const value: unknown = await response.json().catch(() => undefined);
+  if (!isRecord(value) || !isRecord(value.error)) return undefined;
+  return typeof value.error.code === "string" ? value.error.code : undefined;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -74,7 +121,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    // Do not surface response bodies here: upstream errors can echo credentials.
+    // Read only the stable domain code. Never surface upstream messages or bodies:
+    // they can contain provider details or credentials.
+    const code = await readPublicErrorCode(response);
+    const domainMessage = code ? domainErrorMessages[code] : undefined;
+    if (domainMessage) {
+      throw new ApiError(domainMessage, response.status, code);
+    }
     if (response.status === 401 || response.status === 403) {
       throw new ApiError(
         "The credential was not accepted. Check it and try again.",
@@ -186,19 +239,59 @@ async function connectTmdb(
 }
 
 interface SetupStatusResponse {
-  complete?: boolean;
-  requiredSteps?: string[];
+  complete: boolean;
+  requiredSteps: string[];
+  profile: unknown;
+  integrations: {
+    tmdb?: { configured?: boolean; status?: string };
+    webshare?: { configured?: boolean; status?: string };
+    localAi?: { enabled?: boolean; configured?: boolean; status?: string };
+  };
+  capabilities?: { playback?: boolean };
+}
+
+function readProfile(value: unknown): ProfileDraft | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    typeof value.name !== "string" ||
+    !["en", "cs", "de"].includes(String(value.locale)) ||
+    !Array.isArray(value.preferences) ||
+    !value.preferences.every((preference) => typeof preference === "string")
+  ) {
+    return undefined;
+  }
+  return {
+    name: value.name,
+    locale: value.locale as ProfileDraft["locale"],
+    preferences: value.preferences,
+  };
 }
 
 export const apiClient: StreamerApi = {
   getSetupStatus: async () => {
     const status = await request<SetupStatusResponse>("/setup/status");
+    const complete = status.complete;
+    const tmdbIntegration = status.integrations.tmdb;
+    const tmdbConnected =
+      tmdbIntegration?.configured === true ||
+      tmdbIntegration?.status === "connected" ||
+      (!status.requiredSteps.includes("connect_tmdb") && complete);
+    const localAi = status.integrations.localAi;
+    const webshare = status.integrations.webshare;
+    const localAiConnected =
+      localAi?.enabled === true &&
+      ["connected", "ready", "available"].includes(localAi.status ?? "ready");
+    const profile = readProfile(status.profile);
     return {
-      tmdb:
-        status.requiredSteps?.includes("connect_tmdb") || !status.complete
-          ? "not-configured"
-          : "connected",
-      localAi: "not-configured",
+      complete,
+      tmdb: tmdbConnected ? "connected" : "not-configured",
+      webshare:
+        webshare?.configured === true || webshare?.status === "connected"
+          ? "connected"
+          : "not-configured",
+      localAi: localAiConnected ? "connected" : "not-configured",
+      playback: status.capabilities?.playback === true,
+      ...(profile ? { profile } : {}),
     };
   },
   connectTmdb,
@@ -240,8 +333,18 @@ export const apiClient: StreamerApi = {
     request<HistoryResponse>(
       `/profiles/${encodeURIComponent(profileId)}/history`,
     ),
+  removeHistoryEvent: (profileId, eventId) =>
+    request<void>(
+      `/profiles/${encodeURIComponent(profileId)}/history/${encodeURIComponent(eventId)}`,
+      { method: "DELETE" },
+    ),
+  clearHistory: (profileId) =>
+    request<void>(`/profiles/${encodeURIComponent(profileId)}/history/clear`, {
+      method: "POST",
+      body: JSON.stringify({ confirmationToken: "clear-history" }),
+    }),
   startPlayback: (profileId, titleId) =>
-    request<{ ok: true; eventId: string; library: LibraryResponse }>(
+    request<PlaybackStartResult>(
       `/profiles/${encodeURIComponent(profileId)}/playback/start`,
       { method: "POST", body: JSON.stringify({ titleId }) },
     ),

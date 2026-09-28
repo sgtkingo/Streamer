@@ -5,6 +5,14 @@ import {
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   StreamerCore,
+  DiscoverySessionClosedError,
+  DiscoverySessionNotFoundError,
+  IdempotencyConflictError,
+  PlaybackNotConfiguredError,
+  PlaybackRecheckError,
+  PreviousRequestFailedError,
+  RequestInProgressError,
+  UnknownProfileError,
   UnknownTitleError,
   UnplayableTitleError,
 } from "../services/streamer-core.js";
@@ -29,6 +37,14 @@ const titleParamsSchema = {
 } as const;
 
 function sendDomainError(reply: FastifyReply, error: unknown) {
+  if (error instanceof UnknownProfileError) {
+    return reply.code(404).send({
+      error: {
+        code: "PROFILE_NOT_FOUND",
+        message: "The requested profile does not exist.",
+      },
+    });
+  }
   if (error instanceof UnknownTitleError) {
     return reply.code(404).send({
       error: {
@@ -42,6 +58,58 @@ function sendDomainError(reply: FastifyReply, error: unknown) {
       error: {
         code: "TITLE_NOT_PLAYABLE",
         message: "No verified playable variant is available.",
+      },
+    });
+  }
+  if (
+    error instanceof DiscoverySessionNotFoundError ||
+    error instanceof DiscoverySessionClosedError
+  ) {
+    return reply.code(404).send({
+      error: {
+        code: "DISCOVERY_SESSION_NOT_FOUND",
+        message:
+          "The discovery conversation is unavailable. Start a new search.",
+      },
+    });
+  }
+  if (error instanceof IdempotencyConflictError) {
+    return reply.code(409).send({
+      error: {
+        code: "IDEMPOTENCY_CONFLICT",
+        message: "This request key was already used for different input.",
+      },
+    });
+  }
+  if (error instanceof RequestInProgressError) {
+    return reply.code(409).send({
+      error: {
+        code: "REQUEST_IN_PROGRESS",
+        message: "The same discovery request is still being processed.",
+      },
+    });
+  }
+  if (error instanceof PreviousRequestFailedError) {
+    return reply.code(409).send({
+      error: {
+        code: "REQUEST_PREVIOUSLY_FAILED",
+        message: "The previous attempt failed. Retry with a new request key.",
+      },
+    });
+  }
+  if (error instanceof PlaybackNotConfiguredError) {
+    return reply.code(409).send({
+      error: {
+        code: "PLAYBACK_NOT_CONFIGURED",
+        message: "Connect and validate a live streaming provider first.",
+      },
+    });
+  }
+  if (error instanceof PlaybackRecheckError) {
+    return reply.code(409).send({
+      error: {
+        code: "PLAYBACK_RECHECK_FAILED",
+        message: "The source could not be revalidated for playback.",
       },
     });
   }
@@ -65,9 +133,13 @@ export function registerContentRoutes(
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const query = request.query as { profileId?: string };
-      return dependencies.core.home(query.profileId ?? "default");
+      try {
+        return dependencies.core.home(query.profileId ?? "default");
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
     },
   );
 
@@ -88,17 +160,29 @@ export function registerContentRoutes(
         },
       },
     },
-    async (request) =>
-      dependencies.core.discover(DiscoveryRequestSchema.parse(request.body)),
+    async (request, reply) => {
+      try {
+        return await dependencies.core.discover(
+          DiscoveryRequestSchema.parse(request.body),
+        );
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
   );
 
   app.get(
     "/api/v1/profiles/:profileId/library",
     { schema: { params: profileParamsSchema } },
-    async (request) =>
-      dependencies.core.library(
-        (request.params as { profileId: string }).profileId,
-      ),
+    async (request, reply) => {
+      try {
+        return dependencies.core.library(
+          (request.params as { profileId: string }).profileId,
+        );
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
   );
 
   app.put(
@@ -119,18 +203,92 @@ export function registerContentRoutes(
     { schema: { params: titleParamsSchema } },
     async (request, reply) => {
       const params = request.params as { profileId: string; titleId: string };
-      dependencies.core.removeFromLibrary(params.profileId, params.titleId);
-      return reply.code(204).send();
+      try {
+        dependencies.core.removeFromLibrary(params.profileId, params.titleId);
+        return reply.code(204).send();
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
     },
   );
 
   app.get(
     "/api/v1/profiles/:profileId/history",
     { schema: { params: profileParamsSchema } },
-    async (request) =>
-      dependencies.core.history(
-        (request.params as { profileId: string }).profileId,
-      ),
+    async (request, reply) => {
+      try {
+        return dependencies.core.history(
+          (request.params as { profileId: string }).profileId,
+        );
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
+  );
+
+  app.delete(
+    "/api/v1/profiles/:profileId/history/:eventId",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["profileId", "eventId"],
+          additionalProperties: false,
+          properties: {
+            profileId: { type: "string", minLength: 1, maxLength: 120 },
+            eventId: { type: "string", minLength: 1, maxLength: 120 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { profileId, eventId } = request.params as {
+        profileId: string;
+        eventId: string;
+      };
+      try {
+        const removed = dependencies.core.removeHistoryEvent(
+          profileId,
+          eventId,
+        );
+        return removed
+          ? reply.code(204).send()
+          : reply.code(404).send({
+              error: {
+                code: "HISTORY_EVENT_NOT_FOUND",
+                message: "The history event does not exist.",
+              },
+            });
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/profiles/:profileId/history/clear",
+    {
+      schema: {
+        params: profileParamsSchema,
+        body: {
+          type: "object",
+          required: ["confirmationToken"],
+          additionalProperties: false,
+          properties: {
+            confirmationToken: { type: "string", const: "clear-history" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { profileId } = request.params as { profileId: string };
+      try {
+        const removedCount = dependencies.core.clearHistory(profileId);
+        return { ok: true, removedCount };
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
   );
 
   app.post(
@@ -152,8 +310,16 @@ export function registerContentRoutes(
       const { profileId } = request.params as { profileId: string };
       const { titleId } = request.body as { titleId: string };
       try {
-        const result = dependencies.core.startPlayback(profileId, titleId);
-        return { ok: true, eventId: result.eventId, library: result.library };
+        const result = await dependencies.core.startPlayback(
+          profileId,
+          titleId,
+        );
+        return {
+          ok: true,
+          eventId: result.eventId,
+          library: result.library,
+          playback: result.playback,
+        };
       } catch (error) {
         return sendDomainError(reply, error);
       }
@@ -173,6 +339,7 @@ export function registerContentRoutes(
     dependencies.core.configureProfile({
       id: "default",
       ...parsed.data.profile,
+      localAiEnabled: parsed.data.localAiEnabled,
     });
     return reply.code(204).send();
   });

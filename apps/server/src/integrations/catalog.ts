@@ -1,43 +1,46 @@
+import type {
+  IntegrationDescriptor,
+  IntegrationId,
+} from "@streamer-ai/contracts";
 import type { IntegrationConnectionStatus } from "../stores/integration-state-store.js";
 
 export interface IntegrationCatalogItem {
-  id: "tmdb";
+  id: IntegrationId;
   name: string;
   description: string;
-  category: "metadata";
+  category: IntegrationDescriptor["kind"];
   required: boolean;
   status: IntegrationConnectionStatus;
   configured: boolean;
   setup: {
-    credentialType: "api_read_access_token";
-    documentationUrl: string;
+    mode: IntegrationDescriptor["setupMode"];
+    documentationUrl: string | null;
     automatedCheck: boolean;
-    steps: string[];
+    canAutoDetect: boolean;
+    supportsDisconnect: boolean;
   };
 }
 
-export function tmdbCatalogItem(
+/** Public UI model generated from the shared registry, never provider secrets. */
+export function integrationCatalogItem(
+  descriptor: IntegrationDescriptor,
   status: IntegrationConnectionStatus,
   configured: boolean,
 ): IntegrationCatalogItem {
   return {
-    id: "tmdb",
-    name: "The Movie Database (TMDB)",
-    description:
-      "Primary source for titles, artwork, release dates, cast and discovery.",
-    category: "metadata",
-    required: true,
+    id: descriptor.id,
+    name: descriptor.name.en,
+    description: descriptor.description.en,
+    category: descriptor.kind,
+    required: !descriptor.optional,
     status,
     configured,
     setup: {
-      credentialType: "api_read_access_token",
-      documentationUrl: "https://developer.themoviedb.org/docs/getting-started",
-      automatedCheck: true,
-      steps: [
-        "Create or sign in to a TMDB account.",
-        "Open API settings and copy the API Read Access Token.",
-        "Paste it in StreamerAI; the app verifies it before saving.",
-      ],
+      mode: descriptor.setupMode,
+      documentationUrl: descriptor.documentationUrl ?? null,
+      automatedCheck: descriptor.automatedChecks,
+      canAutoDetect: descriptor.canAutoDetect,
+      supportsDisconnect: descriptor.supportsDisconnect,
     },
   };
 }

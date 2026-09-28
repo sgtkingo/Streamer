@@ -16,15 +16,16 @@ deployment and agent decisions live in [`instructions/`](instructions/).
 - Fastify local API with Home, discovery, Library, History, health and setup
   endpoints.
 - SQLite persistence in WAL mode for profiles, an on-demand canonical cache,
-  provider ID mappings, Library and append-only History.
+  provider ID mappings, durable discovery sessions/idempotency, Library and
+  editable History.
 - TMDB connection verification designed around an in-app guided setup flow.
-- Provider-neutral contracts for metadata, media, subtitle, search, agent and
-  sync adapters.
+- Provider-neutral contracts and registries, plus prepared TMDB metadata,
+  Webshare media/playback-ticket and Ollama structured-agent adapters.
 
-The current development feed is explicitly labeled as preview data. It does not
-claim working Webshare playback, live provider ratings, Cloudflare sync or a
-finished autonomous discovery pipeline. Those features have mandatory
-integration and safety gates in
+The current development feed is explicitly labeled as preview data and cannot
+create playback history. It does not claim production Webshare playback, live
+provider ratings, Cloudflare sync or a finished autonomous discovery pipeline.
+Those features still have mandatory real-provider and safety gates in
 [`instructions/DEPLOY.md`](instructions/DEPLOY.md).
 
 ## Prerequisites
@@ -56,7 +57,7 @@ not in environment files or source control.
 pnpm check
 ```
 
-This runs formatting validation, package-level linting, type checks, unit tests
+This runs formatting validation, ESLint, type checks, unit tests
 and production builds.
 
 ## Security baseline

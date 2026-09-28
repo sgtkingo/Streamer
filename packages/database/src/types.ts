@@ -1,6 +1,7 @@
 import type {
   AvailabilityState,
   CatalogTitle,
+  ContentMode,
   IntegrationHealthState,
   IntegrationId,
   IntegrationSetupState,
@@ -174,4 +175,104 @@ export interface AppendWatchHistoryInput extends Omit<
 export interface AvailabilitySnapshot {
   state: AvailabilityState;
   checkedAt: string | null;
+}
+
+export const DISCOVERY_SESSION_STATES = [
+  "active",
+  "completed",
+  "needs-setup",
+  "failed",
+] as const;
+export type DiscoverySessionState = (typeof DISCOVERY_SESSION_STATES)[number];
+
+export interface DiscoverySessionRecord<TContext = unknown> {
+  id: string;
+  profileId: string;
+  mode: ContentMode;
+  state: DiscoverySessionState;
+  context: TContext;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface CreateDiscoverySessionInput<TContext = unknown> {
+  id: string;
+  profileId: string;
+  mode: ContentMode;
+  context?: TContext;
+}
+
+export const DISCOVERY_MESSAGE_ROLES = [
+  "system",
+  "user",
+  "assistant",
+  "tool",
+] as const;
+export type DiscoveryMessageRole = (typeof DISCOVERY_MESSAGE_ROLES)[number];
+
+export interface DiscoveryMessageRecord<TContent = unknown> {
+  id: string;
+  sessionId: string;
+  ordinal: number;
+  role: DiscoveryMessageRole;
+  content: TContent;
+  requestId: string | null;
+  createdAt: string;
+}
+
+export interface AppendDiscoveryMessageInput<TContent = unknown> {
+  id: string;
+  sessionId: string;
+  role: DiscoveryMessageRole;
+  content: TContent;
+  requestId?: string | null;
+  createdAt?: string;
+}
+
+export const IDEMPOTENCY_STATES = [
+  "in-progress",
+  "completed",
+  "failed",
+] as const;
+export type IdempotencyState = (typeof IDEMPOTENCY_STATES)[number];
+
+export interface IdempotencyRecord<TResponse = unknown> {
+  scope: string;
+  key: string;
+  requestHash: string;
+  state: IdempotencyState;
+  response: TResponse | null;
+  statusCode: number | null;
+  errorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
+export interface ClaimIdempotencyInput {
+  scope: string;
+  key: string;
+  requestHash: string;
+  ttlSeconds?: number;
+}
+
+export type IdempotencyClaim<TResponse = unknown> =
+  | { status: "claimed"; record: IdempotencyRecord<TResponse> }
+  | { status: "replay"; record: IdempotencyRecord<TResponse> }
+  | { status: "in-progress"; record: IdempotencyRecord<TResponse> }
+  | { status: "conflict"; record: IdempotencyRecord<TResponse> };
+
+export interface CompleteIdempotencyInput<TResponse = unknown> {
+  scope: string;
+  key: string;
+  requestHash: string;
+  response: TResponse;
+  statusCode: number;
+}
+
+export interface FailIdempotencyInput<
+  TResponse = unknown,
+> extends CompleteIdempotencyInput<TResponse> {
+  errorCode: string;
 }

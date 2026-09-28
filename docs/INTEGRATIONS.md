@@ -23,12 +23,18 @@ adapters into Home and discovery behavior:
 ```ts
 export interface StreamerContentProvider {
   readonly id: string;
+  readonly mode: "live" | "preview";
   bootstrapTitles(): readonly CatalogTitle[];
   buildHome(input: HomeFeedInput): HomeFeed;
   discover(
     request: DiscoveryRequest,
     completedAt: string,
+    context?: DiscoveryConversationContext,
   ): Promise<DiscoveryResponse>;
+  preparePlayback?(
+    profileId: string,
+    title: CatalogTitle,
+  ): Promise<PlaybackGrant>;
 }
 ```
 
@@ -48,6 +54,28 @@ const app = createApp({
 `StreamerCore` validates coordinator output, stores every returned title in the
 canonical cache, decorates profile membership, and owns Library and History.
 Do not duplicate those responsibilities in an adapter.
+
+The optional conversation context contains durable, ordered prior turns. A
+provider must return the same session ID and content mode it was invoked with.
+`preparePlayback` is available only on live coordinators and must perform the
+provider recheck before returning a grant.
+
+## Implemented preparation adapters
+
+- `TmdbApiClient` owns bounded credential-safe HTTP; `TmdbMetadataProvider`
+  maps search, details, ratings, feeds and series structure to shared records.
+- `WebshareClient` validates XML application status even on HTTP 200;
+  `WebshareMediaProvider` filters restrictions, reinspects the selected file and
+  exchanges the direct URL for an in-memory same-origin playback ticket.
+- `OllamaAgentProvider` supplies bounded structured generation. The separate
+  onboarding preflight verifies runtime version, exact model metadata,
+  structured output, tool calls and model residency before enabling it.
+- `AdapterRegistry` enforces unique IDs and a single provider family at
+  composition time.
+
+These adapters are exported but are not silently activated. The default
+coordinator remains preview-only until a live coordinator and verified user
+connections are explicitly supplied.
 
 ## Adding a provider
 
@@ -109,6 +137,10 @@ returns normalized formats. It must distinguish:
 Direct media URLs are short-lived server concerns. Do not persist them in
 canonical records, expose provider credentials to the browser, or treat search
 results as playable before a final recheck.
+
+The ticket store is deliberately memory-only and holds at most one active
+playback grant. A redirect uses `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`; issuing another grant revokes the prior one.
 
 ## Agent and search providers
 

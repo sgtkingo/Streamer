@@ -35,6 +35,12 @@ A live coordinator is injected through `createApp({ contentProvider })`; it can
 compose any number of provider adapters without changing routes, Library or
 History.
 
+Fine-grained adapters are registered through a family-scoped
+`AdapterRegistry`. The repository now includes TMDB metadata normalization,
+Webshare media normalization/ticket issuance and an Ollama structured-agent
+adapter. They are deliberately not auto-composed into a live coordinator until
+credentials and the required provider capability tests pass.
+
 ## Discovery boundary
 
 The model is a planner and ranker, not a fact database. A live coordinator must
@@ -46,7 +52,8 @@ perform these stages:
 4. Assign or reuse an internal canonical ID and save external ID mappings.
 5. Check media availability, formats and series coverage.
 6. Remove unvalidated candidates from agent context.
-7. Rank only validated records and return the three UI groups.
+7. Rank only validated records and return best match, available, unavailable
+   and explicitly unverified groups.
 
 Every completed discovery response is parsed against
 `DiscoveryResponseSchema`. `StreamerCore` then upserts all returned records into
@@ -62,9 +69,11 @@ the canonical cache before the user can save or play them.
 - Movies cannot carry series coverage.
 - Series completeness must match verified season and episode counts.
 - Discovery groups cannot contain duplicate canonical IDs.
-- Playback is rejected unless the current canonical record is playable.
-- Starting playback adds or updates Library membership and appends History in
-  one SQLite transaction.
+- Playback is rejected unless the current canonical record is playable and a
+  live provider successfully performs a just-in-time recheck.
+- Only after a valid short-lived grant exists does playback add/update Library
+  membership and append History in one SQLite transaction.
+- Preview fixtures can never create playback history.
 - Provider credentials never enter shared media records, browser state, logs or
   sync payloads.
 
@@ -80,6 +89,8 @@ SQLite runs in WAL mode. The default development file is
 - `external_entity_mappings` - provider IDs and provenance;
 - `library_entries` - per-profile saved/in-progress/completed state;
 - `watch_history_events` - append-only playback history;
+- `discovery_sessions` and `discovery_messages` - durable conversation state;
+- `idempotency_records` - request ownership, replay and collision detection;
 - profiles, settings, jobs and integration status tables from earlier
   migrations.
 
@@ -94,6 +105,8 @@ sync downtime must not prevent access to already cached local data. Adapter
 errors are translated to stable public codes; raw upstream responses remain
 server-side and redacted.
 
-Production startup rejects the current in-memory secret and integration-state
-stores. A durable secure-local implementation is a release gate, not a TODO to
-work around with environment variables.
+The default integration-state store is SQLite, while development secrets remain
+memory-only and are reported as such. Production startup rejects any
+non-persistent or unencrypted secret store. A durable OS-keychain/external
+secret adapter is a release gate, not something to work around with environment
+variables.
