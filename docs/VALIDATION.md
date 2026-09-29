@@ -57,17 +57,19 @@ therefore intentionally not simulated:
 3. Run backup/restore and key-loss drills for the implemented portable
    AES-256-GCM `SecretStore`. Its Docker key is separate from the persistent
    application volume and production startup rejects the memory fallback.
-4. Repeat the full Ollama canary through Docker. The host-native acceptance run
-   passed all six checks on Ollama `0.34.4` with explicit `qwen3.5:4b`: 4.7B
+4. Keep the Docker/Ollama flight in the release checklist. The first container
+   acceptance run passed on 2026-09-29: the private server became healthy, the
+   web gateway served the PWA on port 8080 and `host.docker.internal` reached
+   Ollama `0.34.4` with explicit `qwen3.5:4b`. All six checks passed with 4.7B
    Q4_K_M, 4096 context tokens, tools and structured output working, and
-   3,128,038,521 bytes reported resident in VRAM. The full preflight took about
-   4.15 seconds. The deployment timeout remains 60 seconds for slower cold
-   starts; the remaining gate is bridge connectivity and equivalent behavior
-   from the server container.
+   3,128,038,521 bytes reported resident in VRAM. The cold container preflight
+   took about 10.49 seconds, within the 60-second deployment timeout.
 5. Add the selected subtitle/search providers and optional Cloudflare sync only
    after their separate compliance and privacy gates.
-6. Perform the final desktop/mobile visual browser pass. The in-app browser
-   control surface was unavailable in the validation session; runtime HTTP
-   smoke checks passed, but this visual gate is not represented as complete.
+6. Repeat desktop/mobile visual checks after material UI changes. The first
+   production-Compose pass completed at desktop width and an emulated 390 px
+   viewport with no document-level horizontal overflow. The in-app browser
+   control surface was unavailable, so the same installed Edge engine was
+   driven through its local debugging protocol instead.
 
 The full automated command for the in-repository checks is `pnpm check`.

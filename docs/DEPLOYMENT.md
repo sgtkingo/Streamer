@@ -21,6 +21,10 @@ mapping as well.
 
 - SQLite and `secrets.vault` live in the `streamerai_data` Docker volume.
 - `.secrets/streamerai_master_key` is mounted read-only and is ignored by Git.
+- On Windows, Docker Desktop can display bind-mounted files with synthetic
+  Linux mode bits (commonly `0777`). Treat the host Windows ACL as authoritative
+  and restrict the `.secrets` directory to the installation account and system
+  administrators.
 - Vault values use AES-256-GCM with a fresh nonce and authenticated envelope on
   every mutation; writes replace the vault atomically.
 - Back up the volume and master key separately. Neither backup alone reveals a

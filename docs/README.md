@@ -13,6 +13,8 @@ and approved future decisions remain authoritative in [`../instructions`](../ins
   search, agent and sync providers.
 - [`VALIDATION.md`](VALIDATION.md) - second-sight findings, verified invariants
   and external release gates.
+- [`FIRST_FLIGHT.md`](FIRST_FLIGHT.md) - observed Docker, Ollama and responsive UI
+  acceptance results.
 
 ## Current milestone
 
