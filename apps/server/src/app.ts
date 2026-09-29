@@ -8,6 +8,11 @@ import {
 import type { InferenceFetch } from "./integrations/ollama-preflight.js";
 import { type FetchLike } from "./integrations/tmdb-client.js";
 import type { ProviderFetch } from "./integrations/tmdb-api-client.js";
+import { TmdbApiClient } from "./integrations/tmdb-api-client.js";
+import { TmdbMetadataProvider } from "./integrations/tmdb-metadata-provider.js";
+import { WebshareClient } from "./integrations/webshare-client.js";
+import { WebshareMediaProvider } from "./integrations/webshare-media-provider.js";
+import { OllamaAgentProvider } from "./integrations/ollama-agent-provider.js";
 import { createAppLogger } from "./logging.js";
 import { registerSystemRoutes } from "./routes/system.js";
 import { registerContentRoutes } from "./routes/content.js";
@@ -17,6 +22,7 @@ import { registerTmdbRoutes } from "./routes/tmdb.js";
 import { registerWebshareRoutes } from "./routes/webshare.js";
 import { StreamerCore } from "./services/streamer-core.js";
 import type { StreamerContentProvider } from "./services/content-provider.js";
+import { LiveContentCoordinator } from "./services/live-content-coordinator.js";
 import {
   InMemoryPlaybackTicketStore,
   type PlaybackTicketStore,
@@ -124,7 +130,41 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
     database = openStreamerDatabase({ filename, clock: now });
   }
   const stores = createStores(options, database, environment, runtimeConfig);
-  const core = new StreamerCore(database, now, options.contentProvider);
+  const playbackTicketStore =
+    options.playbackTicketStore ?? new InMemoryPlaybackTicketStore(now);
+  const contentProvider =
+    options.contentProvider ??
+    (environment === "production"
+      ? new LiveContentCoordinator({
+          agent: new OllamaAgentProvider({
+            config: runtimeConfig.inference,
+            now,
+          }),
+          metadata: new TmdbMetadataProvider({
+            client: new TmdbApiClient({
+              secretStore: stores.secretStore,
+              fetch: options.providerFetch ?? defaultProviderFetch(),
+              timeoutMs: options.tmdbTimeoutMs ?? 8_000,
+            }),
+            now,
+          }),
+          media: new WebshareMediaProvider({
+            client: new WebshareClient({
+              secretStore: stores.secretStore,
+              fetch: options.providerFetch ?? defaultProviderFetch(),
+              timeoutMs: 8_000,
+            }),
+            issuePlaybackTicket: (input) => playbackTicketStore.issue(input),
+            now,
+          }),
+          integrationStateStore: stores.integrationStateStore,
+          inference: runtimeConfig.inference,
+          localeForProfile: (profileId) =>
+            database.profiles.get(profileId)?.locale ?? "en",
+          now,
+        })
+      : undefined);
+  const core = new StreamerCore(database, now, contentProvider);
   const app =
     options.logger === false
       ? Fastify({ logger: false, bodyLimit: 64 * 1024 })
@@ -181,10 +221,7 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
     now,
   });
   registerContentRoutes(app, { core });
-  registerPlaybackRoutes(
-    app,
-    options.playbackTicketStore ?? new InMemoryPlaybackTicketStore(now),
-  );
+  registerPlaybackRoutes(app, playbackTicketStore);
   registerInferenceRoutes(app, {
     fetch: options.inferenceFetch ?? defaultInferenceFetch(),
     config: runtimeConfig.inference,

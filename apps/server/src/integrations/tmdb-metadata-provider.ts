@@ -92,6 +92,15 @@ function tmdbLanguage(locale: string): string {
   return locale;
 }
 
+function normalizedIdentity(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("en")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function results(value: unknown): Record<string, unknown>[] {
   const body = object(value);
   if (!Array.isArray(body.results)) {
@@ -178,6 +187,42 @@ export class TmdbMetadataProvider implements MetadataProvider {
     _context: ProviderContext,
   ): Promise<MetadataCandidate[]> {
     const query = MetadataSearchQuerySchema.parse(rawQuery);
+    let creditedTitles: Set<string> | null = null;
+    if (query.person !== null) {
+      const people = results(
+        await this.#client.searchPerson(
+          query.person,
+          tmdbLanguage(query.locale),
+        ),
+      );
+      const requestedPerson = normalizedIdentity(query.person);
+      const person = people.find(
+        (item) =>
+          Number.isInteger(item.id) &&
+          typeof item.name === "string" &&
+          normalizedIdentity(item.name) === requestedPerson,
+      );
+      if (person === undefined) return [];
+      const credits = object(
+        await this.#client.getPersonCombinedCredits(
+          positiveInteger(person.id),
+          tmdbLanguage(query.locale),
+        ),
+      );
+      creditedTitles = new Set<string>();
+      for (const rawCredit of [
+        ...(Array.isArray(credits.cast) ? credits.cast : []),
+        ...(Array.isArray(credits.crew) ? credits.crew : []),
+      ]) {
+        const credit = object(rawCredit);
+        if (!Number.isInteger(credit.id)) continue;
+        if (credit.media_type === "movie") {
+          creditedTitles.add(`movie:${String(credit.id)}`);
+        } else if (credit.media_type === "tv") {
+          creditedTitles.add(`series:${String(credit.id)}`);
+        }
+      }
+    }
     const kinds =
       query.kind === null ? (["movie", "series"] as const) : [query.kind];
     const retrievedAt = this.#now().toISOString();
@@ -197,6 +242,12 @@ export class TmdbMetadataProvider implements MetadataProvider {
               });
         return results(response).flatMap((item): MetadataCandidate[] => {
           if (!Number.isInteger(item.id)) return [];
+          if (
+            creditedTitles !== null &&
+            !creditedTitles.has(`${kind}:${String(item.id)}`)
+          ) {
+            return [];
+          }
           const title = optionalString(item.title ?? item.name);
           if (title === null) return [];
           return [

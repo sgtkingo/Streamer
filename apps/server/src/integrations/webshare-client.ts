@@ -265,7 +265,7 @@ export class WebshareClient {
       name,
       type: tag(xml, "type"),
       size: integer(tag(xml, "size")),
-      downloadable: booleanFlag(tag(xml, "downloadable")),
+      downloadable: booleanFlag(tag(xml, "available")),
       passwordProtected: booleanFlag(tag(xml, "password")),
       copyrighted: booleanFlag(tag(xml, "copyrighted")),
     };

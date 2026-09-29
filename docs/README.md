@@ -32,12 +32,13 @@ The repository contains a working local vertical slice:
 - provider-neutral contracts, family registries, TMDB normalization, portable
   encrypted secret storage and a Webshare authentication/media/ticket adapter.
 
-The default content coordinator is `PreviewContentProvider`. Its records,
-ratings and availability are explicitly marked as preview facts and it cannot
-start playback. The TMDB, Webshare and Ollama adapter boundaries are ready for
-composition, but a live autonomous coordinator and Webshare real-account
-playback spike are not yet claimed as complete. Subtitle
-retrieval, web search and Cloudflare sync remain specified future adapters.
+Production now uses `LiveContentCoordinator`: Ollama proposes bounded
+candidates, TMDB validates canonical identity, ratings and explicitly named
+people, and Webshare deterministically verifies availability and formats. The
+preview provider remains a development/test fallback and cannot start
+playback. Real Webshare search and format inspection have passed; the final
+playback/Range/seek acceptance spike, subtitle retrieval, web search and
+Cloudflare sync remain open.
 
 ## Specification map
 

@@ -174,7 +174,7 @@ export function readRuntimeConfig(
       ),
       maxOutputTokens: integerSetting(
         env.INFERENCE_MAX_OUTPUT_TOKENS,
-        128,
+        512,
         "INFERENCE_MAX_OUTPUT_TOKENS",
         32,
         4_096,

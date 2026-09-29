@@ -113,6 +113,21 @@ export class TmdbApiClient {
     });
   }
 
+  searchPerson(query: string, language = "en-US"): Promise<unknown> {
+    return this.get("/search/person", {
+      query,
+      language,
+      include_adult: "false",
+      page: "1",
+    });
+  }
+
+  getPersonCombinedCredits(id: number, language = "en-US"): Promise<unknown> {
+    return this.get(`/person/${this.safeId(id)}/combined_credits`, {
+      language,
+    });
+  }
+
   getMovie(id: number, language = "en-US"): Promise<unknown> {
     return this.get(`/movie/${this.safeId(id)}`, { language });
   }

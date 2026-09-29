@@ -47,26 +47,24 @@ acceptance tests have already happened.
 These need authorized accounts, hardware or an infrastructure decision and are
 therefore intentionally not simulated:
 
-1. Compose a production `LiveContentCoordinator` from the prepared adapters and
-   add deterministic candidate matching/ranking fixtures.
-2. Exercise the implemented Webshare username/password flow with the authorized
-   VIP account, then run Range, seeking, TTL, codec and restriction tests. Unit
-   and API tests verify the standard md5-crypt vector, `salt`/`login` request,
-   password disposal and WST-only storage; real-provider behavior remains the
-   acceptance gate.
-3. Run backup/restore and key-loss drills for the implemented portable
+1. Finish the Webshare playback acceptance spike with Range, seeking, ticket
+   TTL, codec and restriction tests. The authorized VIP account has now passed
+   guided login, live search, `file_info` inspection and format normalization.
+   This flight also found and fixed a contract mismatch: `file_info` reports
+   availability in `<available>`, not `<downloadable>`.
+2. Run backup/restore and key-loss drills for the implemented portable
    AES-256-GCM `SecretStore`. Its Docker key is separate from the persistent
    application volume and production startup rejects the memory fallback.
-4. Keep the Docker/Ollama flight in the release checklist. The first container
+3. Keep the Docker/Ollama flight in the release checklist. The first container
    acceptance run passed on 2026-09-29: the private server became healthy, the
    web gateway served the PWA on port 8080 and `host.docker.internal` reached
    Ollama `0.34.4` with explicit `qwen3.5:4b`. All six checks passed with 4.7B
    Q4_K_M, 4096 context tokens, tools and structured output working, and
    3,128,038,521 bytes reported resident in VRAM. The cold container preflight
    took about 10.49 seconds, within the 60-second deployment timeout.
-5. Add the selected subtitle/search providers and optional Cloudflare sync only
+4. Add the selected subtitle/search providers and optional Cloudflare sync only
    after their separate compliance and privacy gates.
-6. Repeat desktop/mobile visual checks after material UI changes. The first
+5. Repeat desktop/mobile visual checks after material UI changes. The first
    production-Compose pass completed at desktop width and an emulated 390 px
    viewport with no document-level horizontal overflow. The in-app browser
    control surface was unavailable, so the same installed Edge engine was

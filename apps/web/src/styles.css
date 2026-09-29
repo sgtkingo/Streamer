@@ -547,6 +547,19 @@ a {
   border-top: 1px solid var(--border);
 }
 
+.connection-form--webshare {
+  grid-template-columns: minmax(180px, 0.8fr) minmax(320px, 1.45fr) auto;
+}
+
+.connection-form--webshare .connection-form__intro {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.webshare-password-field {
+  min-width: 0;
+}
+
 .connection-help strong {
   color: var(--slate);
   font-size: 12px;
@@ -587,6 +600,42 @@ a {
   background: transparent;
   color: var(--slate);
   font-size: 11px;
+}
+
+.input-with-action--icon input {
+  padding-right: 54px;
+}
+
+.input-with-action .password-visibility-toggle {
+  display: grid;
+  place-items: center;
+  min-width: 40px;
+  color: #9298a1;
+  border-radius: 4px;
+}
+
+.password-visibility-toggle:hover {
+  color: var(--white);
+  background: #242429;
+}
+
+.password-visibility-toggle:focus-visible {
+  color: var(--white);
+  outline: 2px solid #8e949e;
+  outline-offset: 1px;
+}
+
+.password-visibility-toggle svg {
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.password-visibility-toggle .eye-slash {
+  stroke-width: 2;
 }
 
 .inline-message {
@@ -1142,7 +1191,8 @@ a {
 
 .title-card--hero {
   grid-template-columns: minmax(280px, 42%) minmax(0, 1fr);
-  grid-template-rows: minmax(460px, 62vh);
+  grid-template-rows: auto;
+  min-height: clamp(520px, 62vh, 720px);
   border-color: #46464c;
 }
 
@@ -1232,7 +1282,7 @@ a {
   padding: 18px;
 }
 .title-card--hero .title-card__content {
-  justify-content: center;
+  justify-content: flex-start;
   padding: clamp(28px, 5vw, 76px);
 }
 .title-card__label {
@@ -1593,7 +1643,8 @@ a {
   }
   .title-card--hero {
     grid-template-columns: minmax(230px, 38%) minmax(0, 1fr);
-    grid-template-rows: minmax(410px, auto);
+    grid-template-rows: auto;
+    min-height: 460px;
   }
 }
 
@@ -1699,6 +1750,7 @@ a {
   .title-card--hero {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;
+    min-height: 0;
   }
   .title-card--hero .title-card__art {
     min-height: 330px;

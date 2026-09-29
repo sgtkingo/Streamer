@@ -78,6 +78,13 @@ function mediaFormat(name: string, type: string | null): MediaFormat {
   };
 }
 
+function isVideoType(type: string | null): boolean {
+  return (
+    type === null ||
+    /^(?:video|mkv|mp4|avi|webm|mov|m4v|mpg|mpeg|ts|m2ts)$/i.test(type.trim())
+  );
+}
+
 /** Deterministic media adapter; it never exposes WST or a Webshare direct URL. */
 export class WebshareMediaProvider implements MediaProvider {
   readonly #client: WebshareClient;
@@ -179,7 +186,7 @@ export class WebshareMediaProvider implements MediaProvider {
       !file.downloadable ||
       file.passwordProtected ||
       file.copyrighted ||
-      (file.type !== null && !/video/i.test(file.type))
+      !isVideoType(file.type)
     ) {
       throw new ProviderRequestError("webshare", "forbidden", false);
     }

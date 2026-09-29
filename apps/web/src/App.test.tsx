@@ -165,7 +165,17 @@ describe("onboarding", () => {
 
     await user.type(screen.getByLabelText(/username or email/i), "viewer");
     const password = "webshare-password-sentinel";
-    await user.type(screen.getByLabelText(/^password$/i), password);
+    const passwordInput = screen.getByLabelText(/^password$/i);
+    await user.type(passwordInput, password);
+    expect(passwordInput).toHaveAttribute("type", "password");
+    await user.click(
+      screen.getByRole("button", { name: /show webshare password/i }),
+    );
+    expect(passwordInput).toHaveAttribute("type", "text");
+    await user.click(
+      screen.getByRole("button", { name: /hide webshare password/i }),
+    );
+    expect(passwordInput).toHaveAttribute("type", "password");
     await user.click(screen.getByRole("button", { name: /connect webshare/i }));
 
     expect(

@@ -38,15 +38,18 @@ export interface StreamerContentProvider {
 }
 ```
 
-Inject a live implementation at the composition root:
+Production creates the built-in implementation at the composition root. Tests
+and alternative deployments can inject their own implementation:
 
 ```ts
 const app = createApp({
   contentProvider: new LiveContentCoordinator({
     agent,
-    search,
-    metadataProviders,
-    mediaProviders,
+    metadata,
+    media,
+    integrationStateStore,
+    inference,
+    localeForProfile,
   }),
 });
 ```
@@ -76,9 +79,10 @@ provider recheck before returning a grant.
 - `AdapterRegistry` enforces unique IDs and a single provider family at
   composition time.
 
-These adapters are exported but are not silently activated. The default
-coordinator remains preview-only until a live coordinator and verified user
-connections are explicitly supplied.
+Production activates these adapters through `LiveContentCoordinator`; it still
+requires the guided connections to report configured before making a live
+turn. Development and tests retain the explicit preview fallback unless a
+content provider is injected.
 
 ## Adding a provider
 

@@ -36,9 +36,27 @@ controlled on the host as described in [`DEPLOYMENT.md`](DEPLOYMENT.md), and the
 key must never be committed or copied into logs.
 
 Only the web gateway publishes a host port. The API and Ollama remain
-unpublished by Compose. TMDB and Webshare credentials were deliberately not
-used during this flight; their real-account acceptance checks remain open and
-must be completed through the local onboarding UI.
+unpublished by Compose.
+
+## Live discovery follow-up
+
+After the user completed guided setup, a second flight exercised the encrypted
+TMDB and Webshare connections plus host Ollama without exposing credentials.
+The production coordinator returned live results for an autumn/Sandra Bullock
+request: TMDB verified the named person's combined credits and canonical
+metadata, while Webshare confirmed playable variants and normalized formats
+for `The Blind Side`, `Miss Congeniality`, `Speed` and `The Lake House`.
+
+The live flight exposed two adapter defects that are now regression-tested:
+
+- the free-form agent reply could mention candidates before provider
+  validation, so the public reply is now generated only from validated groups;
+- Webshare `file_info` uses `<available>` and extension values such as `mkv`, as
+  documented by the [official API reference](https://webshare.cz/apidoc/).
+
+Playback itself was deliberately not started during the automated flight,
+because a successful start correctly mutates the user's Library and History.
+Range, seeking and ticket-expiry behavior remain a separate acceptance gate.
 
 ## Reproduce
 

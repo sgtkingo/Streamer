@@ -148,6 +148,74 @@ describe("provider HTTP clients", () => {
     ]);
   });
 
+  it("deterministically filters title candidates by an explicitly named person", async () => {
+    const secrets = new NonPersistentMemorySecretStore();
+    await secrets.set(TMDB_READ_TOKEN_SECRET_KEY, "test-token");
+    const client = new TmdbApiClient({
+      secretStore: secrets,
+      fetch: async (url) => {
+        if (url.includes("/search/person")) {
+          return response(
+            200,
+            JSON.stringify({
+              results: [{ id: 18277, name: "Sandra Bullock" }],
+            }),
+          );
+        }
+        if (url.includes("/person/18277/combined_credits")) {
+          return response(
+            200,
+            JSON.stringify({
+              cast: [{ id: 2044, media_type: "movie" }],
+              crew: [],
+            }),
+          );
+        }
+        return response(
+          200,
+          JSON.stringify({
+            results: [
+              {
+                id: 2044,
+                title: "The Lake House",
+                original_title: "The Lake House",
+                release_date: "2006-06-16",
+              },
+              {
+                id: 999,
+                title: "Unrelated Film",
+                original_title: "Unrelated Film",
+                release_date: "2006-01-01",
+              },
+            ],
+          }),
+        );
+      },
+      baseUrl: "https://tmdb.test/3",
+    });
+    const provider = new TmdbMetadataProvider({ client });
+
+    const result = await provider.search(
+      {
+        query: "The Lake House",
+        kind: "movie",
+        year: 2006,
+        person: "Sandra Bullock",
+        locale: "en",
+        limit: 5,
+      },
+      {
+        requestId: "request-person",
+        profileId: "default",
+        locale: "en",
+        deadlineAt: "2099-01-01T00:00:00.000Z",
+        secretRef: null,
+      },
+    );
+
+    expect(result.map((item) => item.ref.externalId)).toEqual(["2044"]);
+  });
+
   it("rechecks Webshare restrictions and returns only a same-origin playback ticket", async () => {
     const secrets = new NonPersistentMemorySecretStore();
     await secrets.set(WEBSHARE_WST_SECRET_KEY, "test-wst");
@@ -155,7 +223,7 @@ describe("provider HTTP clients", () => {
       if (url.includes("/file_info/")) {
         return response(
           200,
-          "<response><status>OK</status><name>Arrival.2016.1080p.x264.mkv</name><type>video</type><size>123</size><downloadable>1</downloadable><password>0</password><copyrighted>0</copyrighted></response>",
+          "<response><status>OK</status><name>Arrival.2016.1080p.x264.mkv</name><type>mkv</type><size>123</size><available>1</available><password>0</password><copyrighted>0</copyrighted></response>",
         );
       }
       return response(

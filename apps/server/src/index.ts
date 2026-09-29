@@ -18,6 +18,10 @@ export {
   type StreamerContentProvider,
 } from "./services/content-provider.js";
 export {
+  LiveContentCoordinator,
+  type LiveContentCoordinatorOptions,
+} from "./services/live-content-coordinator.js";
+export {
   checkTmdbConnection,
   TMDB_CONFIGURATION_URL,
   TMDB_READ_TOKEN_SECRET_KEY,

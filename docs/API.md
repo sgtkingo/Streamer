@@ -135,13 +135,14 @@ salt, WST or account identifier.
 - `POST /inference/detect` runs the bounded Ollama version, installed-model,
   metadata, structured-output, tool-call and residency checks. It does not
   expose an arbitrary inference proxy.
-- The TMDB transport and normalized `MetadataProvider` adapter are implemented,
-  but live discovery remains disabled until a live coordinator is explicitly
-  composed.
+- Production composes Ollama, TMDB and Webshare into the live discovery
+  coordinator. The model proposes bounded candidates; TMDB verifies canonical
+  facts and explicitly named people, then Webshare verifies playable files and
+  formats before a title reaches the response.
 - The Webshare transport, guided `salt`/`login` exchange and normalized
   `MediaProvider` adapter are implemented. The real-account playback/Range
-  capability spike remains a release gate; no endpoint accepts a caller-supplied
-  WST or returns it to the browser.
+  seeking/Range capability spike remains a release gate; no endpoint accepts a
+  caller-supplied WST or returns it to the browser.
 
 ## Versioning rules
 

@@ -30,16 +30,18 @@ React UI
   -> tiles rendered from validated records only
 ```
 
-`PreviewContentProvider` implements the coordinator contract for development.
-A live coordinator is injected through `createApp({ contentProvider })`; it can
-compose any number of provider adapters without changing routes, Library or
-History.
+`PreviewContentProvider` remains the explicit development/test fallback. The
+production composition root now creates `LiveContentCoordinator` from Ollama,
+TMDB and Webshare adapters; custom deployments can still inject another
+implementation through `createApp({ contentProvider })` without changing
+routes, Library or History.
 
 Fine-grained adapters are registered through a family-scoped
 `AdapterRegistry`. The repository now includes TMDB metadata normalization,
 Webshare media normalization/ticket issuance and an Ollama structured-agent
-adapter. They are deliberately not auto-composed into a live coordinator until
-credentials and the required provider capability tests pass.
+adapter. The live coordinator checks sanitized integration state before a turn
+and returns `needs-setup` instead of substituting preview facts when a required
+provider is disconnected.
 
 ## Discovery boundary
 

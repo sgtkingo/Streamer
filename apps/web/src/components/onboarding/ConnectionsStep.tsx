@@ -33,6 +33,7 @@ export function ConnectionsStep({
   const [isMemoryOnly, setIsMemoryOnly] = useState(false);
   const [webshareUsername, setWebshareUsername] = useState("");
   const [websharePassword, setWebsharePassword] = useState("");
+  const [showWebsharePassword, setShowWebsharePassword] = useState(false);
   const [webshareStatus, setWebshareStatus] = useState<UiStatus>(
     uiStatusFor(initialWebshareState),
   );
@@ -110,6 +111,7 @@ export function ConnectionsStep({
         websharePassword,
       );
       setWebsharePassword("");
+      setShowWebsharePassword(false);
       if (!result.ok) {
         setWebshareStatus("error");
         setWebshareMessage(
@@ -130,6 +132,7 @@ export function ConnectionsStep({
       onWebshareConnected();
     } catch (error) {
       setWebsharePassword("");
+      setShowWebsharePassword(false);
       setWebshareStatus("error");
       setWebshareMessage(safeErrorMessage(error));
     }
@@ -247,8 +250,8 @@ export function ConnectionsStep({
             <StatusBadge status={webshareStatus} />
           </div>
           {webshareStatus !== "success" && (
-            <div className="connection-form">
-              <p className="muted-note">
+            <div className="connection-form connection-form--webshare">
+              <p className="muted-note connection-form__intro">
                 Sign in locally. Your password is used only to obtain a Webshare
                 session token and is never stored.
               </p>
@@ -261,14 +264,47 @@ export function ConnectionsStep({
                   onChange={(event) => setWebshareUsername(event.target.value)}
                 />
               </label>
-              <label className="field">
+              <label className="field webshare-password-field">
                 <span>Password</span>
-                <input
-                  type="password"
-                  autoComplete="current-password"
-                  value={websharePassword}
-                  onChange={(event) => setWebsharePassword(event.target.value)}
-                />
+                <span className="input-with-action input-with-action--icon">
+                  <input
+                    type={showWebsharePassword ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={websharePassword}
+                    onChange={(event) =>
+                      setWebsharePassword(event.target.value)
+                    }
+                  />
+                  <button
+                    className="password-visibility-toggle"
+                    type="button"
+                    aria-label={
+                      showWebsharePassword
+                        ? "Hide Webshare password"
+                        : "Show Webshare password"
+                    }
+                    aria-pressed={showWebsharePassword}
+                    title={
+                      showWebsharePassword ? "Hide password" : "Show password"
+                    }
+                    onClick={() =>
+                      setShowWebsharePassword((visible) => !visible)
+                    }
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="20"
+                      height="20"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                      <circle cx="12" cy="12" r="2.75" />
+                      {showWebsharePassword && (
+                        <path className="eye-slash" d="m4 4 16 16" />
+                      )}
+                    </svg>
+                  </button>
+                </span>
               </label>
               <button
                 className="button button--secondary"
