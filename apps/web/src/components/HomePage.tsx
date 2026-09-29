@@ -91,6 +91,27 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
     resultsHeadingRef.current?.focus();
   }, [result]);
 
+  useEffect(() => {
+    if (!readyPlayback) return;
+    const expiresIn =
+      Date.parse(readyPlayback.grant.expiresAt) - Date.now() - 3_000;
+    if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+      setReadyPlayback(null);
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setReadyPlayback((current) =>
+        current?.grant.grantId === readyPlayback.grant.grantId ? null : current,
+      );
+      setNotice((current) =>
+        current.includes(readyPlayback.title)
+          ? "The verified stream expired. Check it again when you are ready."
+          : current,
+      );
+    }, expiresIn);
+    return () => window.clearTimeout(timeout);
+  }, [readyPlayback]);
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     const message = query.trim();
@@ -148,7 +169,7 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
     }
   };
 
-  const play = async (item: CatalogTitle) => {
+  const checkPlayback = async (item: CatalogTitle) => {
     if (pendingAction) return;
     setPendingAction({ titleId: item.id, kind: "play" });
     setError("");
@@ -156,7 +177,7 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
     try {
       const response = await api.startPlayback(profileId, item.id);
       setReadyPlayback({ title: item.title, grant: response.playback });
-      setNotice(`${item.title} is ready from the verified streaming source.`);
+      setNotice(`${item.title} is verified. Press Play to open the stream.`);
       onLibraryChanged();
       await loadHome();
       setResult((current) =>
@@ -171,6 +192,11 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
 
   const pendingFor = (item: CatalogTitle) =>
     pendingAction?.titleId === item.id ? pendingAction.kind : undefined;
+
+  const playbackUrlFor = (item: CatalogTitle) =>
+    readyPlayback?.grant.titleId === item.id
+      ? readyPlayback.grant.url
+      : undefined;
 
   const resultMode = result?.mode ?? "preview";
   const availableResults =
@@ -262,19 +288,9 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
         <p className="page-message" role="status">
           {notice}
           {readyPlayback && (
-            <>
-              {" "}
-              <a
-                href={readyPlayback.grant.url}
-                rel="noreferrer"
-                className="playback-link"
-              >
-                Open stream
-              </a>
-              <small>
-                Link expires {formatExpiry(readyPlayback.grant.expiresAt)}.
-              </small>
-            </>
+            <small>
+              Ready until {formatExpiry(readyPlayback.grant.expiresAt)}.
+            </small>
           )}
         </p>
       )}
@@ -317,9 +333,10 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
               item={result.bestMatch.title}
               reason={result.bestMatch.reason}
               hero
-              onPlay={play}
+              onPlay={checkPlayback}
               onAdd={add}
               playbackEnabled={resultMode === "live"}
+              playbackUrl={playbackUrlFor(result.bestMatch.title)}
               pendingAction={pendingFor(result.bestMatch.title)}
             />
           )}
@@ -332,9 +349,10 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     key={title.id}
                     item={title}
                     reason={reason}
-                    onPlay={play}
+                    onPlay={checkPlayback}
                     onAdd={add}
                     playbackEnabled={resultMode === "live"}
+                    playbackUrl={playbackUrlFor(title)}
                     pendingAction={pendingFor(title)}
                   />
                 ))}
@@ -350,7 +368,7 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     key={title.id}
                     item={title}
                     reason={reason}
-                    onPlay={play}
+                    onPlay={checkPlayback}
                     onAdd={add}
                     playbackEnabled={false}
                     pendingAction={pendingFor(title)}
@@ -372,7 +390,7 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     key={title.id}
                     item={title}
                     reason={reason}
-                    onPlay={play}
+                    onPlay={checkPlayback}
                     onAdd={add}
                     playbackEnabled={false}
                     pendingAction={pendingFor(title)}
@@ -418,9 +436,10 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                   <TitleCard
                     key={item.id}
                     item={item}
-                    onPlay={play}
+                    onPlay={checkPlayback}
                     onAdd={add}
                     playbackEnabled={feed.mode === "live"}
+                    playbackUrl={playbackUrlFor(item)}
                     pendingAction={pendingFor(item)}
                   />
                 ))}

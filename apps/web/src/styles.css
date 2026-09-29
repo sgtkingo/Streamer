@@ -139,6 +139,48 @@ a {
   background: var(--accent-hover);
 }
 
+.button--primary.playback-ready {
+  text-decoration: none;
+}
+
+.button--checking:disabled {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #3a3a3f;
+  background: #252529;
+  color: #a5a5aa;
+  opacity: 1;
+}
+
+.button--checking::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 22%,
+    rgba(255, 255, 255, 0.08) 42%,
+    rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0.08) 58%,
+    transparent 78%
+  );
+  content: "";
+  transform: translateX(-130%);
+  animation: playback-mirror-flash 1.35s ease-in-out infinite;
+}
+
+@keyframes playback-mirror-flash {
+  to {
+    transform: translateX(130%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button--checking::after {
+    animation: none;
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
 .button--secondary {
   border: 1px solid #4a4a4e;
   background: var(--surface-raised);

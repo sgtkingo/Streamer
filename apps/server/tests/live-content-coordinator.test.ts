@@ -228,4 +228,88 @@ describe("LiveContentCoordinator", () => {
     expect(response.bestMatch).toBeNull();
     expect(dependencies.generateStructured).not.toHaveBeenCalled();
   });
+
+  it("tries the next verified media mirror when playback creation fails", async () => {
+    const dependencies = coordinatorDependencies();
+    const first = {
+      ref: { providerId: "webshare", candidateId: "file-broken" },
+      releaseName: "Canonical.One.2001.1080p.mkv",
+      sizeBytes: 10,
+      seasonNumber: null,
+      episodeNumber: null,
+      confidence: 0.8,
+      provenance: { ...provenance, providerId: "webshare" },
+    };
+    const second = {
+      ...first,
+      ref: { providerId: "webshare", candidateId: "file-working" },
+      releaseName: "Canonical.One.2001.720p.mkv",
+    };
+    vi.mocked(dependencies.media.search).mockImplementation(async (request) =>
+      request.title.includes("One") ? [first, second] : [],
+    );
+    vi.mocked(dependencies.media.inspect).mockImplementation(async (ref) => ({
+      ref,
+      variantId: ref.candidateId,
+      format: {
+        label: "1080p · H.264",
+        container: "mkv",
+        resolution: "1080p",
+        videoCodec: "H.264",
+        audioLanguages: ["en"],
+        subtitleLanguages: [],
+      },
+      directPlay: true,
+      supportsHttpRange: true,
+      embeddedSubtitles: [],
+      provenance: { ...provenance, providerId: "webshare" },
+      expiresAt: null,
+    }));
+    const createPlayback = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("mirror unavailable"))
+      .mockResolvedValueOnce({
+        grantId: "grant-working",
+        titleId: "sai:tmdb:movie:1",
+        providerId: "webshare",
+        variantId: "file-working",
+        url: "/api/v1/playback/grants/grant-working",
+        supportsHttpRange: true,
+        expiresAt: "2026-09-29T20:01:00.000Z",
+        embeddedSubtitles: [],
+      });
+    dependencies.media.createPlayback = createPlayback;
+    const coordinator = new LiveContentCoordinator({
+      ...dependencies,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    const response = await coordinator.discover(
+      {
+        profileId: "default",
+        sessionId: "session-mirrors",
+        message: "Find two films",
+        idempotencyKey: "request-mirrors",
+      },
+      NOW,
+    );
+
+    const grant = await coordinator.preparePlayback(
+      "default",
+      response.bestMatch!.title,
+    );
+
+    expect(createPlayback).toHaveBeenCalledTimes(2);
+    expect(grant.variantId).toBe("file-working");
+  });
 });

@@ -329,9 +329,14 @@ export class StreamerCore {
       progressPercent:
         this.database.library.get(profileId, titleId)?.progressPercent ?? null,
     });
-    const playback = PlaybackGrantSchema.parse(
-      await this.contentProvider.preparePlayback(profileId, title),
-    );
+    let playback: PlaybackGrant;
+    try {
+      playback = PlaybackGrantSchema.parse(
+        await this.contentProvider.preparePlayback(profileId, title),
+      );
+    } catch {
+      throw new PlaybackRecheckError(titleId);
+    }
     const nowDate = this.now();
     if (
       playback.titleId !== titleId ||

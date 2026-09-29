@@ -8,6 +8,7 @@ interface TitleCardProps {
   onAdd: (item: CatalogTitle) => void;
   onRemove?: (item: CatalogTitle) => void;
   playbackEnabled?: boolean;
+  playbackUrl?: string | undefined;
   pendingAction?: "play" | "add" | "remove";
 }
 
@@ -48,6 +49,7 @@ export function TitleCard({
   onAdd,
   onRemove,
   playbackEnabled = true,
+  playbackUrl,
   pendingAction,
 }: TitleCardProps) {
   const playable = titleHasPlayableVariant(item);
@@ -116,9 +118,21 @@ export function TitleCard({
           </div>
         )}
         <div className="title-card__actions">
-          {playable && playbackEnabled && (
+          {playable && playbackEnabled && playbackUrl && (
+            <a
+              className="button button--primary button--compact playback-ready"
+              href={playbackUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <span aria-hidden="true">▶</span> Play
+            </a>
+          )}
+          {playable && playbackEnabled && !playbackUrl && (
             <button
-              className="button button--primary button--compact"
+              className={`button button--primary button--compact${
+                pendingAction === "play" ? " button--checking" : ""
+              }`}
               type="button"
               onClick={() => onPlay(item)}
               disabled={pendingAction !== undefined}

@@ -71,7 +71,7 @@ function createApi(): StreamerApi {
         variantId: "variant-1",
         url: "https://media.example/stream",
         supportsHttpRange: true,
-        expiresAt: "2026-09-27T12:05:00.000Z",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
         embeddedSubtitles: [],
       },
     }),
@@ -298,5 +298,68 @@ describe("conversational Home", () => {
       within(results).getByRole("button", { name: /add to library/i }),
     );
     expect(api.addToLibrary).toHaveBeenCalledWith("default", title.id);
+  });
+
+  it("keeps Play disabled with a mirror loader until the stream is verified", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    let resolvePlayback!: (
+      value: Awaited<ReturnType<StreamerApi["startPlayback"]>>,
+    ) => void;
+    vi.mocked(api.startPlayback).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePlayback = resolve;
+        }),
+    );
+    vi.mocked(api.discover).mockResolvedValue({
+      sessionId: "session-check",
+      mode: "live",
+      stage: "completed",
+      reply: "A verified match.",
+      bestMatch: { title, reason: "A good fit." },
+      available: [],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+    render(<App api={api} />);
+
+    await user.type(
+      await screen.findByLabelText(/ask streamerai/i),
+      "a warm romantic movie",
+    );
+    await user.click(screen.getByRole("button", { name: /find something/i }));
+    const checkButton = await screen.findByRole("button", {
+      name: /check & play/i,
+    });
+    await user.click(checkButton);
+
+    const checking = screen.getByRole("button", { name: /checking/i });
+    expect(checking).toBeDisabled();
+    expect(checking).toHaveClass("button--checking");
+
+    resolvePlayback({
+      ok: true,
+      eventId: "event-check",
+      library: { profileId: "default", items: [] },
+      playback: {
+        grantId: "grant-check",
+        titleId: title.id,
+        providerId: "test-media",
+        variantId: "variant-check",
+        url: "/api/v1/playback/grants/grant-check",
+        supportsHttpRange: true,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        embeddedSubtitles: [],
+      },
+    });
+
+    const playLink = await screen.findByRole("link", { name: /^play$/i });
+    expect(playLink).toHaveAttribute(
+      "href",
+      "/api/v1/playback/grants/grant-check",
+    );
   });
 });

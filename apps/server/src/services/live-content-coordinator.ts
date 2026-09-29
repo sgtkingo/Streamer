@@ -75,7 +75,7 @@ interface AgentPlan {
 
 interface ValidatedCandidate {
   ranked: RankedTitle;
-  playbackCandidate: MediaCandidateRef | null;
+  playbackCandidates: MediaCandidateRef[];
 }
 
 export interface LiveContentCoordinatorOptions {
@@ -306,7 +306,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
   readonly #inference: RuntimeConfig["inference"];
   readonly #localeForProfile: LiveContentCoordinatorOptions["localeForProfile"];
   readonly #now: () => Date;
-  readonly #playbackCandidates = new Map<string, MediaCandidateRef>();
+  readonly #playbackCandidates = new Map<string, MediaCandidateRef[]>();
 
   constructor(options: LiveContentCoordinatorOptions) {
     this.#agent = options.agent;
@@ -482,10 +482,10 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       };
     }
     for (const item of validated) {
-      if (item.playbackCandidate !== null) {
+      if (item.playbackCandidates.length > 0) {
         this.#playbackCandidates.set(
           item.ranked.title.id,
-          item.playbackCandidate,
+          item.playbackCandidates,
         );
       }
     }
@@ -516,8 +516,8 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       idempotencyKey: `playback-${createHash("sha256").update(`${profileId}:${title.id}:${this.#now().toISOString()}`).digest("hex").slice(0, 24)}`,
     };
     const context = providerContext(request, locale, this.#now());
-    let candidate = this.#playbackCandidates.get(title.id) ?? null;
-    if (candidate === null) {
+    let candidates = this.#playbackCandidates.get(title.id) ?? [];
+    if (candidates.length === 0) {
       const results = await this.#media.search(
         {
           titleId: title.id,
@@ -532,28 +532,40 @@ export class LiveContentCoordinator implements StreamerContentProvider {
         },
         context,
       );
-      candidate =
-        results.find((item) =>
+      candidates = results
+        .filter((item) =>
           titleMatchesRelease(
             item,
             title.title,
             title.originalTitle,
             title.year,
           ),
-        )?.ref ?? null;
+        )
+        .slice(0, 12)
+        .map((item) => item.ref);
     }
-    if (candidate === null)
+    if (candidates.length === 0)
       throw new Error("No playback candidate remains available.");
-    const variant = await this.#media.inspect(candidate, context);
-    return this.#media.createPlayback(
-      {
-        profileId,
-        titleId: title.id,
-        variant: { ...candidate, variantId: variant.variantId },
-        startPositionSeconds: 0,
-      },
-      context,
+    let lastError: unknown = new Error(
+      "No playback candidate remains available.",
     );
+    for (const candidate of candidates) {
+      try {
+        const variant = await this.#media.inspect(candidate, context);
+        return await this.#media.createPlayback(
+          {
+            profileId,
+            titleId: title.id,
+            variant: { ...candidate, variantId: variant.variantId },
+            startPositionSeconds: 0,
+          },
+          context,
+        );
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
   }
 
   private async missingRequiredIntegrations(): Promise<string[]> {
@@ -611,7 +623,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       expiresAt: null,
     };
     let seriesCoverage: CatalogTitle["seriesCoverage"] = null;
-    let playbackCandidate: MediaCandidateRef | null = null;
+    let playbackCandidates: MediaCandidateRef[] = [];
     try {
       const mediaCandidates = await this.#media.search(
         {
@@ -654,7 +666,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       }
       if (inspected.length > 0) {
         formats = uniqueFormats(inspected.map((item) => item.variant.format));
-        playbackCandidate = inspected[0]?.candidate.ref ?? null;
+        playbackCandidates = inspected.map((item) => item.candidate.ref);
         availabilityProvenance =
           inspected[0]?.variant.provenance ?? availabilityProvenance;
         if (metadata.kind === "movie") {
@@ -735,7 +747,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     });
     return {
       ranked: { title, reason: agent.reason },
-      playbackCandidate,
+      playbackCandidates,
     };
   }
 }
