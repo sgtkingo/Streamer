@@ -139,6 +139,16 @@ a {
   background: var(--accent-hover);
 }
 
+.button--warning {
+  border: 1px solid #b86b37;
+  background: #49301f;
+  color: #ffc08a;
+}
+
+.button--warning:hover:not(:disabled) {
+  background: #5b3821;
+}
+
 .button--primary.playback-ready {
   text-decoration: none;
 }
@@ -1403,6 +1413,22 @@ a {
 }
 .availability-dot--unknown {
   background: var(--warning);
+}
+
+.availability-dot--playback-failed {
+  background: #f09a54;
+  box-shadow: 0 0 8px rgb(240 154 84 / 45%);
+}
+
+.title-card--playback-unavailable .title-card__availability,
+.title-card__playback-error {
+  color: #f3a56b;
+}
+
+.title-card__playback-error {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .title-card__actions {

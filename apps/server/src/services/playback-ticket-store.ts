@@ -2,11 +2,13 @@ import type { PlaybackTicketInput } from "../integrations/webshare-media-provide
 
 export interface PlaybackTicketRecord extends PlaybackTicketInput {
   readonly createdAt: string;
+  readonly started: boolean;
 }
 
 export interface PlaybackTicketStore {
   issue(input: PlaybackTicketInput): string;
   get(grantId: string): PlaybackTicketRecord | null;
+  markStarted(grantId: string): boolean;
   revoke(grantId: string): boolean;
   revokeActive(): void;
 }
@@ -40,7 +42,11 @@ export class InMemoryPlaybackTicketStore implements PlaybackTicketStore {
     if (Date.parse(input.expiresAt) <= this.now().getTime()) {
       throw new Error("Playback ticket must expire in the future.");
     }
-    this.#active = { ...input, createdAt: this.now().toISOString() };
+    this.#active = {
+      ...input,
+      createdAt: this.now().toISOString(),
+      started: false,
+    };
     return `/api/v1/playback/grants/${encodeURIComponent(input.grantId)}`;
   }
 
@@ -51,6 +57,13 @@ export class InMemoryPlaybackTicketStore implements PlaybackTicketStore {
       return null;
     }
     return { ...this.#active };
+  }
+
+  markStarted(grantId: string): boolean {
+    const active = this.get(grantId);
+    if (active === null || active.started) return false;
+    this.#active = { ...active, started: true };
+    return true;
   }
 
   revoke(grantId: string): boolean {

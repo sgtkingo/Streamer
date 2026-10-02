@@ -69,7 +69,10 @@ provider recheck before returning a grant.
   maps search, details, ratings, feeds and series structure to shared records.
 - `WebshareClient` validates XML application status even on HTTP 200;
   `WebshareMediaProvider` filters restrictions, reinspects the selected file and
-  exchanges the direct URL for an in-memory same-origin playback ticket.
+  exchanges the direct URL for an in-memory same-origin playback ticket. The
+  WST session token goes in the form body of authenticated Webshare API calls.
+  Playback accepts only HTTPS Webshare or `*.dl.wsfiles.cz` CDN hosts and
+  requires a successful one-byte Range response before issuing the ticket.
 - Guided Webshare setup calls the documented `salt` and `login` endpoints,
   derives the legacy password digest in request-local memory, discards the
   plaintext password and stores only WST through `SecretStore`.

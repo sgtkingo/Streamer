@@ -7,6 +7,7 @@ import type {
 import type { PlaybackGrant, StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
 import { TitleCard } from "./TitleCard";
+import { usePlaybackChecks } from "./usePlaybackChecks";
 
 interface HomePageProps {
   api: StreamerApi;
@@ -58,6 +59,7 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const requestCounter = useRef(0);
   const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const playbackChecks = usePlaybackChecks(api, profileId);
 
   const loadHome = useCallback(async () => {
     try {
@@ -169,22 +171,18 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
     }
   };
 
-  const checkPlayback = async (item: CatalogTitle) => {
+  const play = async (item: CatalogTitle) => {
     if (pendingAction) return;
+    const streamWindow = window.open("about:blank", "_blank");
     setPendingAction({ titleId: item.id, kind: "play" });
     setError("");
-    setReadyPlayback(null);
     try {
-      const response = await api.startPlayback(profileId, item.id);
-      setReadyPlayback({ title: item.title, grant: response.playback });
-      setNotice(`${item.title} is verified. Press Play to open the stream.`);
-      onLibraryChanged();
-      await loadHome();
-      setResult((current) =>
-        current ? markInLibrary(current, item.id) : current,
-      );
+      const response = await api.preparePlayback(profileId, item.id);
+      if (streamWindow) streamWindow.location.replace(response.playback.url);
+      else setReadyPlayback({ title: item.title, grant: response.playback });
     } catch (actionError) {
-      setError(safeErrorMessage(actionError));
+      streamWindow?.close();
+      playbackChecks.markFailed(item.id, safeErrorMessage(actionError));
     } finally {
       setPendingAction(null);
     }
@@ -333,7 +331,11 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
               item={result.bestMatch.title}
               reason={result.bestMatch.reason}
               hero
-              onPlay={checkPlayback}
+              onPlay={play}
+              onCheck={playbackChecks.check}
+              playbackCheck={playbackChecks.states.get(
+                result.bestMatch.title.id,
+              )}
               onAdd={add}
               playbackEnabled={resultMode === "live"}
               playbackUrl={playbackUrlFor(result.bestMatch.title)}
@@ -349,7 +351,9 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     key={title.id}
                     item={title}
                     reason={reason}
-                    onPlay={checkPlayback}
+                    onPlay={play}
+                    onCheck={playbackChecks.check}
+                    playbackCheck={playbackChecks.states.get(title.id)}
                     onAdd={add}
                     playbackEnabled={resultMode === "live"}
                     playbackUrl={playbackUrlFor(title)}
@@ -368,9 +372,11 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     key={title.id}
                     item={title}
                     reason={reason}
-                    onPlay={checkPlayback}
+                    onPlay={play}
+                    onCheck={playbackChecks.check}
+                    playbackCheck={playbackChecks.states.get(title.id)}
                     onAdd={add}
-                    playbackEnabled={false}
+                    playbackEnabled={resultMode === "live"}
                     pendingAction={pendingFor(title)}
                   />
                 ))}
@@ -390,9 +396,11 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     key={title.id}
                     item={title}
                     reason={reason}
-                    onPlay={checkPlayback}
+                    onPlay={play}
+                    onCheck={playbackChecks.check}
+                    playbackCheck={playbackChecks.states.get(title.id)}
                     onAdd={add}
-                    playbackEnabled={false}
+                    playbackEnabled={resultMode === "live"}
                     pendingAction={pendingFor(title)}
                   />
                 ))}
@@ -436,7 +444,9 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                   <TitleCard
                     key={item.id}
                     item={item}
-                    onPlay={checkPlayback}
+                    onPlay={play}
+                    onCheck={playbackChecks.check}
+                    playbackCheck={playbackChecks.states.get(item.id)}
                     onAdd={add}
                     playbackEnabled={feed.mode === "live"}
                     playbackUrl={playbackUrlFor(item)}

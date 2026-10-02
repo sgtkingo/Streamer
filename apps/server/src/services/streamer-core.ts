@@ -309,12 +309,45 @@ export class StreamerCore {
     library: LibraryResponse;
     playback: PlaybackGrant;
   }> {
+    const playback = await this.preparePlayback(profileId, titleId);
+    return {
+      ...this.recordPlaybackStart(profileId, titleId),
+      playback,
+    };
+  }
+
+  async checkPlayback(profileId: string, titleId: string): Promise<void> {
     this.requireProfile(profileId);
     const item = this.database.titles.get(titleId);
     if (item === null) throw new UnknownTitleError(titleId);
-    if (item.availability !== "available" && item.availability !== "partial") {
-      throw new UnplayableTitleError(titleId);
+    if (
+      this.contentProvider.mode !== "live" ||
+      this.contentProvider.checkPlayback === undefined
+    ) {
+      throw new PlaybackNotConfiguredError();
     }
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...stored } = item;
+    const title = CatalogTitleSchema.parse({
+      ...stored,
+      inLibrary: this.database.library.get(profileId, titleId) !== null,
+      matchPercent: null,
+      progressPercent:
+        this.database.library.get(profileId, titleId)?.progressPercent ?? null,
+    });
+    try {
+      await this.contentProvider.checkPlayback(profileId, title);
+    } catch {
+      throw new PlaybackRecheckError(titleId);
+    }
+  }
+
+  async preparePlayback(
+    profileId: string,
+    titleId: string,
+  ): Promise<PlaybackGrant> {
+    this.requireProfile(profileId);
+    const item = this.database.titles.get(titleId);
+    if (item === null) throw new UnknownTitleError(titleId);
     if (
       this.contentProvider.mode !== "live" ||
       this.contentProvider.preparePlayback === undefined
@@ -353,7 +386,17 @@ export class StreamerCore {
         throw new PlaybackRecheckError(titleId);
       }
     }
-    const now = nowDate.toISOString();
+    return playback;
+  }
+
+  recordPlaybackStart(
+    profileId: string,
+    titleId: string,
+  ): { eventId: string; library: LibraryResponse } {
+    this.requireProfile(profileId);
+    const item = this.database.titles.get(titleId);
+    if (item === null) throw new UnknownTitleError(titleId);
+    const now = this.now().toISOString();
     const eventId = randomUUID();
     this.database.transaction(() => {
       this.database.library.upsert({
@@ -377,7 +420,7 @@ export class StreamerCore {
         occurredAt: now,
       });
     });
-    return { eventId, library: this.library(profileId), playback };
+    return { eventId, library: this.library(profileId) };
   }
 
   history(profileId: string): HistoryResponse {

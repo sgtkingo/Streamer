@@ -508,7 +508,58 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     });
   }
 
+  async checkPlayback(profileId: string, title: CatalogTitle): Promise<void> {
+    const { candidates, context } = await this.playbackCandidates(
+      profileId,
+      title,
+    );
+    if (this.#media.checkPlayback === undefined) {
+      throw new Error("The media source does not support playback checks.");
+    }
+    let lastError: unknown = new Error(
+      "No playback candidate remains available.",
+    );
+    for (const candidate of candidates) {
+      try {
+        await this.#media.checkPlayback(candidate, context);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
   async preparePlayback(profileId: string, title: CatalogTitle) {
+    const { candidates, context } = await this.playbackCandidates(
+      profileId,
+      title,
+    );
+    if (candidates.length === 0)
+      throw new Error("No playback candidate remains available.");
+    let lastError: unknown = new Error(
+      "No playback candidate remains available.",
+    );
+    for (const candidate of candidates) {
+      try {
+        const variant = await this.#media.inspect(candidate, context);
+        return await this.#media.createPlayback(
+          {
+            profileId,
+            titleId: title.id,
+            variant: { ...candidate, variantId: variant.variantId },
+            startPositionSeconds: 0,
+          },
+          context,
+        );
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  private async playbackCandidates(profileId: string, title: CatalogTitle) {
     const locale = this.#localeForProfile(profileId);
     const request: DiscoveryRequest = {
       profileId,
@@ -544,28 +595,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
         .slice(0, 12)
         .map((item) => item.ref);
     }
-    if (candidates.length === 0)
-      throw new Error("No playback candidate remains available.");
-    let lastError: unknown = new Error(
-      "No playback candidate remains available.",
-    );
-    for (const candidate of candidates) {
-      try {
-        const variant = await this.#media.inspect(candidate, context);
-        return await this.#media.createPlayback(
-          {
-            profileId,
-            titleId: title.id,
-            variant: { ...candidate, variantId: variant.variantId },
-            startPositionSeconds: 0,
-          },
-          context,
-        );
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
+    return { candidates, context };
   }
 
   private async missingRequiredIntegrations(): Promise<string[]> {

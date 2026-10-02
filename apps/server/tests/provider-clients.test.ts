@@ -226,6 +226,9 @@ describe("provider HTTP clients", () => {
           "<response><status>OK</status><name>Arrival.2016.1080p.x264.mkv</name><type>mkv</type><size>123</size><available>1</available><password>0</password><copyrighted>0</copyrighted></response>",
         );
       }
+      if (url.includes("secret-direct-link")) {
+        return response(206, "x");
+      }
       return response(
         200,
         "<response><status>OK</status><link>https://cdn.webshare.cz/secret-direct-link</link></response>",
@@ -285,13 +288,17 @@ describe("provider HTTP clients", () => {
     });
   });
 
-  it("parses bounded Webshare video results and keeps WST in a header", async () => {
+  it("parses bounded Webshare video results and sends WST in the form body", async () => {
     const secrets = new NonPersistentMemorySecretStore();
     const token = "sentinel-webshare-wst";
     await secrets.set(WEBSHARE_WST_SECRET_KEY, token);
-    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const calls: Array<{
+      url: string;
+      headers: Record<string, string>;
+      body?: string;
+    }> = [];
     const fetch: ProviderFetch = async (url, init) => {
-      calls.push({ url, headers: init.headers });
+      calls.push({ url, headers: init.headers, body: init.body });
       return response(
         200,
         "<response><status>OK</status><total>1</total><file><ident>abc</ident><name>Arrival.2016.1080p.mkv</name><type>video</type><size>123</size><password>0</password><positive_votes>9</positive_votes><negative_votes>1</negative_votes></file></response>",
@@ -310,7 +317,8 @@ describe("provider HTTP clients", () => {
       items: [{ ident: "abc", name: "Arrival.2016.1080p.mkv", size: 123 }],
     });
     expect(calls[0]?.url).not.toContain(token);
-    expect(calls[0]?.headers.wst).toBe(token);
+    expect(calls[0]?.headers.wst).toBeUndefined();
+    expect(new URLSearchParams(calls[0]?.body).get("wst")).toBe(token);
   });
 
   it("treats a Webshare FATAL payload inside HTTP 200 as a provider error", async () => {
@@ -344,6 +352,46 @@ describe("provider HTTP clients", () => {
 
     await expect(client.createVideoLink("abc")).rejects.toMatchObject({
       providerId: "webshare",
+      kind: "invalid-response",
+    });
+  });
+
+  it("accepts an HTTPS link from Webshare's documented wsfiles CDN", async () => {
+    const secrets = new NonPersistentMemorySecretStore();
+    await secrets.set(WEBSHARE_WST_SECRET_KEY, "test-wst");
+    const client = new WebshareClient({
+      secretStore: secrets,
+      fetch: async (url) =>
+        url.includes("/file_link/")
+          ? response(
+              200,
+              "<response><status>OK</status><link>https://free.17.dl.wsfiles.cz/video</link></response>",
+            )
+          : response(206, "x"),
+      baseUrl: "https://webshare.test/api",
+    });
+
+    expect(await client.createVideoLink("abc")).toBe(
+      "https://free.17.dl.wsfiles.cz/video",
+    );
+  });
+
+  it("rejects a direct link that redirects to an HTML page instead of serving media", async () => {
+    const secrets = new NonPersistentMemorySecretStore();
+    await secrets.set(WEBSHARE_WST_SECRET_KEY, "test-wst");
+    const client = new WebshareClient({
+      secretStore: secrets,
+      fetch: async (url) =>
+        url.includes("/file_link/")
+          ? response(
+              200,
+              "<response><status>OK</status><link>https://free.17.dl.wsfiles.cz/video</link></response>",
+            )
+          : response(302, ""),
+      baseUrl: "https://webshare.test/api",
+    });
+
+    await expect(client.createVideoLink("abc")).rejects.toMatchObject({
       kind: "invalid-response",
     });
   });

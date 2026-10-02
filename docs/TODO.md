@@ -24,3 +24,15 @@
 - UI bude defaultně měnit hlavní téma dle sezony (jaro, léto, podzim, zima, Vánoce, Silvestr), včetně decetního živého pozadí, třeba padání rozmazaných barevných listů v pozadí. Uživvatel tohle bude moct změnit v nastavení "Theme" (roletka), horní panel, vedle profile medailonek. Další téma může být Cinemaic, což bude odpovídat aktuálnímu black/white. 
 
 - Logo by mohlo být "kabel s zástrčkou ve tvaru S"
+
+- Seriály nemají Play (defaulrně od 1. dílu) nebo Continue (další díl od posledního či rozkukaný akuální), seriály by také nakonci měli automaticky začít odpočítávat přehrání dalšího dílu. 
+
+- Seriály by měli mít po klknuí detail a rozdělení do sérií a episod 
+
+- Seriály by měli mít hloukové vyhledávání na pozadí, které přidá další episody, do té doby by měli svítit žlutě a psát "• searching...". Podobně i filmy které se nepodaří hned najít. 
+
+- Proč vyhledávání "Naruto" nic nenajde, když na TMDB i Websharu je? 
+
+- Pokud uživatel zadá např. "Něco co jsem neviděl" tak by si agent měl zažádat o seznam filmů které už uživatel viděl a vyhnout se jim. Pokud je konktextové okno malé, komprimovat. 
+
+- Má agent SOUL, SKILLS apod? 

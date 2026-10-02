@@ -40,6 +40,15 @@ export interface PlaybackStartResult {
   playback: PlaybackGrantContract;
 }
 
+export interface PlaybackPrepareResult {
+  ok: true;
+  playback: PlaybackGrantContract;
+}
+
+export interface PlaybackCheckResult {
+  ok: true;
+}
+
 export interface StreamerApi {
   getSetupStatus(): Promise<SetupStatus>;
   connectTmdb(token: string): Promise<ConnectionResult>;
@@ -61,6 +70,14 @@ export interface StreamerApi {
     profileId: string,
     titleId: string,
   ): Promise<PlaybackStartResult>;
+  preparePlayback(
+    profileId: string,
+    titleId: string,
+  ): Promise<PlaybackPrepareResult>;
+  checkPlayback(
+    profileId: string,
+    titleId: string,
+  ): Promise<PlaybackCheckResult>;
 }
 
 class ApiError extends Error {
@@ -82,7 +99,7 @@ const domainErrorMessages: Record<string, string> = {
   PLAYBACK_NOT_CONFIGURED:
     "Connect a streaming source before starting playback.",
   PLAYBACK_RECHECK_FAILED:
-    "The streaming source could not verify this title. Try again in a moment.",
+    "Sorry, this title is currently unavailable. Try checking again in a moment.",
   PROFILE_NOT_FOUND:
     "This profile is not available. Finish setup or choose another profile.",
   HISTORY_EVENT_NOT_FOUND: "That history item no longer exists.",
@@ -383,6 +400,16 @@ export const apiClient: StreamerApi = {
   startPlayback: (profileId, titleId) =>
     request<PlaybackStartResult>(
       `/profiles/${encodeURIComponent(profileId)}/playback/start`,
+      { method: "POST", body: JSON.stringify({ titleId }) },
+    ),
+  preparePlayback: (profileId, titleId) =>
+    request<PlaybackPrepareResult>(
+      `/profiles/${encodeURIComponent(profileId)}/playback/prepare`,
+      { method: "POST", body: JSON.stringify({ titleId }) },
+    ),
+  checkPlayback: (profileId, titleId) =>
+    request<PlaybackCheckResult>(
+      `/profiles/${encodeURIComponent(profileId)}/playback/check`,
       { method: "POST", body: JSON.stringify({ titleId }) },
     ),
 };

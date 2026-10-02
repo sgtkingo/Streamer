@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type { PlaybackTicketStore } from "../services/playback-ticket-store.js";
+import type { StreamerCore } from "../services/streamer-core.js";
 
 export function registerPlaybackRoutes(
   app: FastifyInstance,
   ticketStore: PlaybackTicketStore,
+  core: StreamerCore,
 ): void {
   const paramsSchema = {
     type: "object",
@@ -32,6 +34,9 @@ export function registerPlaybackRoutes(
             message: "The playback grant is missing or expired.",
           },
         });
+      }
+      if (ticketStore.markStarted(grantId)) {
+        core.recordPlaybackStart(ticket.profileId, ticket.titleId);
       }
       return reply
         .header("cache-control", "no-store, private")

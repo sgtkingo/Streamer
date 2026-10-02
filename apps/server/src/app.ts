@@ -221,7 +221,7 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
     now,
   });
   registerContentRoutes(app, { core });
-  registerPlaybackRoutes(app, playbackTicketStore);
+  registerPlaybackRoutes(app, playbackTicketStore, core);
   registerInferenceRoutes(app, {
     fetch: options.inferenceFetch ?? defaultInferenceFetch(),
     config: runtimeConfig.inference,

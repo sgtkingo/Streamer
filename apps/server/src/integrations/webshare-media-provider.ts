@@ -24,6 +24,7 @@ const CONNECTOR_VERSION = "0.1.0";
 
 export interface PlaybackTicketInput {
   grantId: string;
+  profileId: string;
   providerId: string;
   titleId: string;
   variantId: string;
@@ -228,6 +229,7 @@ export class WebshareMediaProvider implements MediaProvider {
     const expiresAt = new Date(this.#now().getTime() + 60_000).toISOString();
     const ticketUrl = await this.#issuePlaybackTicket({
       grantId,
+      profileId: request.profileId,
       providerId: "webshare",
       titleId: request.titleId,
       variantId: variant.variantId,
@@ -244,5 +246,18 @@ export class WebshareMediaProvider implements MediaProvider {
       expiresAt,
       embeddedSubtitles: variant.embeddedSubtitles,
     });
+  }
+
+  async checkPlayback(
+    rawCandidate: MediaCandidateRef,
+    context: ProviderContext,
+  ): Promise<void> {
+    const candidate = MediaCandidateRefSchema.parse(rawCandidate);
+    if (candidate.providerId !== "webshare") {
+      throw new ProviderRequestError("webshare", "invalid-response", false);
+    }
+    await this.inspect(candidate, context);
+    // createVideoLink performs a byte-range probe but does not issue a ticket.
+    await this.#client.createVideoLink(candidate.candidateId);
   }
 }

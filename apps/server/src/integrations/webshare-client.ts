@@ -283,7 +283,10 @@ export class WebshareClient {
     }
     const url = new URL(link);
     const allowedHost =
-      url.hostname === "webshare.cz" || url.hostname.endsWith(".webshare.cz");
+      url.hostname === "webshare.cz" ||
+      url.hostname.endsWith(".webshare.cz") ||
+      url.hostname === "dl.wsfiles.cz" ||
+      url.hostname.endsWith(".dl.wsfiles.cz");
     if (
       url.protocol !== "https:" ||
       !allowedHost ||
@@ -292,7 +295,33 @@ export class WebshareClient {
     ) {
       throw new WebshareResponseError("invalid-response", false, null);
     }
+    await this.probeVideoLink(url.toString());
     return url.toString();
+  }
+
+  private async probeVideoLink(url: string): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    try {
+      const response = await this.#fetch(url, {
+        method: "GET",
+        headers: { range: "bytes=0-0" },
+        signal: controller.signal,
+        redirect: "manual",
+      });
+      await response.body?.cancel();
+      if (response.status !== 206) {
+        throw new ProviderRequestError("webshare", "invalid-response", true);
+      }
+    } catch (error) {
+      if (error instanceof ProviderRequestError) throw error;
+      if (controller.signal.aborted || isAbortFailure(error)) {
+        throw new ProviderRequestError("webshare", "timeout", true);
+      }
+      throw new ProviderRequestError("webshare", "network", true);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async post(
@@ -315,9 +344,11 @@ export class WebshareClient {
         headers: {
           accept: "text/xml; charset=UTF-8",
           "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-          ...(token === undefined ? {} : { wst: token }),
         },
-        body: new URLSearchParams(values).toString(),
+        body: new URLSearchParams({
+          ...values,
+          ...(token === undefined ? {} : { wst: token }),
+        }).toString(),
         signal: controller.signal,
       });
       if (!response.ok) {

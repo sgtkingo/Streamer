@@ -1,15 +1,19 @@
+import { useEffect } from "react";
 import type { CatalogTitle } from "@streamer-ai/contracts";
+import type { PlaybackCheckState } from "./usePlaybackChecks";
 
 interface TitleCardProps {
   item: CatalogTitle;
   reason?: string;
   hero?: boolean;
   onPlay: (item: CatalogTitle) => void;
+  onCheck?: (item: CatalogTitle) => void;
   onAdd: (item: CatalogTitle) => void;
   onRemove?: (item: CatalogTitle) => void;
   playbackEnabled?: boolean;
-  playbackUrl?: string | undefined;
+  playbackUrl?: string;
   pendingAction?: "play" | "add" | "remove";
+  playbackCheck?: PlaybackCheckState;
 }
 
 function ratingLabel(item: CatalogTitle): string {
@@ -46,18 +50,37 @@ export function TitleCard({
   reason,
   hero = false,
   onPlay,
+  onCheck,
   onAdd,
   onRemove,
   playbackEnabled = true,
   playbackUrl,
   pendingAction,
+  playbackCheck,
 }: TitleCardProps) {
   const playable = titleHasPlayableVariant(item);
+  const checkStatus = playbackCheck?.status ?? "checking";
+  const canShowPlayback = playbackEnabled || playable;
+  const displayAvailability = playbackEnabled
+    ? checkStatus === "failed"
+      ? "unavailable"
+      : checkStatus === "ready"
+        ? "available"
+        : "unknown"
+    : item.availability;
+
+  useEffect(() => {
+    if (playbackEnabled && onCheck) onCheck(item);
+  }, [item, onCheck, playbackEnabled]);
+
   const classNames = [
     "title-card",
     hero ? "title-card--hero" : "",
-    item.availability === "unavailable" ? "title-card--unavailable" : "",
-    item.availability === "unknown" ? "title-card--unknown" : "",
+    displayAvailability === "unavailable" ? "title-card--unavailable" : "",
+    displayAvailability === "unknown" ? "title-card--unknown" : "",
+    playbackEnabled && checkStatus === "failed"
+      ? "title-card--playback-unavailable"
+      : "",
     item.kind === "series" ? "title-card--series" : "",
   ]
     .filter(Boolean)
@@ -96,11 +119,28 @@ export function TitleCard({
         {hero && <p className="title-card__synopsis">{item.synopsis}</p>}
         <p className="title-card__availability">
           <span
-            className={`availability-dot availability-dot--${item.availability}`}
+            className={`availability-dot availability-dot--${playbackEnabled && checkStatus === "failed" ? "playback-failed" : playbackEnabled && checkStatus === "ready" ? "available" : displayAvailability}`}
             aria-hidden="true"
           />
-          {availabilityLabel(item)}
+          {playbackEnabled
+            ? checkStatus === "checking"
+              ? "Checking streaming availability…"
+              : checkStatus === "failed"
+                ? "Sorry, currently unavailable"
+                : checkStatus === "ready" &&
+                    item.availability !== "available" &&
+                    item.availability !== "partial"
+                  ? "Verified on streaming source"
+                  : availabilityLabel(item)
+            : availabilityLabel(item)}
         </p>
+        {playbackEnabled && checkStatus === "failed" && (
+          <p className="title-card__playback-error" role="status">
+            {playbackCheck?.status === "failed"
+              ? playbackCheck.message
+              : "Sorry, this title is currently unavailable."}
+          </p>
+        )}
         {item.seriesCoverage && (
           <p className="series-coverage">
             {item.seriesCoverage.seasonsAvailable}/
@@ -118,7 +158,7 @@ export function TitleCard({
           </div>
         )}
         <div className="title-card__actions">
-          {playable && playbackEnabled && playbackUrl && (
+          {canShowPlayback && playbackEnabled && playbackUrl && (
             <a
               className="button button--primary button--compact playback-ready"
               href={playbackUrl}
@@ -128,21 +168,28 @@ export function TitleCard({
               <span aria-hidden="true">▶</span> Play
             </a>
           )}
-          {playable && playbackEnabled && !playbackUrl && (
+          {canShowPlayback && playbackEnabled && !playbackUrl && (
             <button
-              className={`button button--primary button--compact${
-                pendingAction === "play" ? " button--checking" : ""
+              className={`button button--${checkStatus === "failed" ? "warning" : "primary"} button--compact${
+                checkStatus === "checking" || pendingAction === "play"
+                  ? " button--checking"
+                  : ""
               }`}
               type="button"
-              onClick={() => onPlay(item)}
-              disabled={pendingAction !== undefined}
+              onClick={() =>
+                checkStatus === "failed" ? onCheck?.(item) : onPlay(item)
+              }
+              disabled={
+                pendingAction !== undefined || checkStatus === "checking"
+              }
             >
-              <span aria-hidden="true">▶</span>{" "}
-              {pendingAction === "play"
-                ? "Checking…"
-                : item.kind === "series"
-                  ? "Check & play next"
-                  : "Check & play"}
+              {checkStatus === "checking"
+                ? "Checking"
+                : pendingAction === "play"
+                  ? "Starting…"
+                  : checkStatus === "failed"
+                    ? "Retry check"
+                    : "▶ Play"}
             </button>
           )}
           {playable && !playbackEnabled && (

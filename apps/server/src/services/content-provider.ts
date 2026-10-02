@@ -34,6 +34,7 @@ export interface StreamerContentProvider {
     context?: DiscoveryConversationContext,
   ): Promise<DiscoveryResponse>;
   /** Revalidate availability and mint a short-lived URL immediately before playback. */
+  checkPlayback?(profileId: string, title: CatalogTitle): Promise<void>;
   preparePlayback?(
     profileId: string,
     title: CatalogTitle,

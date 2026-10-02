@@ -292,6 +292,62 @@ export function registerContentRoutes(
   );
 
   app.post(
+    "/api/v1/profiles/:profileId/playback/check",
+    {
+      schema: {
+        params: profileParamsSchema,
+        body: {
+          type: "object",
+          required: ["titleId"],
+          additionalProperties: false,
+          properties: {
+            titleId: { type: "string", minLength: 1, maxLength: 160 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { profileId } = request.params as { profileId: string };
+      const { titleId } = request.body as { titleId: string };
+      try {
+        await dependencies.core.checkPlayback(profileId, titleId);
+        return { ok: true };
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/profiles/:profileId/playback/prepare",
+    {
+      schema: {
+        params: profileParamsSchema,
+        body: {
+          type: "object",
+          required: ["titleId"],
+          additionalProperties: false,
+          properties: {
+            titleId: { type: "string", minLength: 1, maxLength: 160 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { profileId } = request.params as { profileId: string };
+      const { titleId } = request.body as { titleId: string };
+      try {
+        return {
+          ok: true,
+          playback: await dependencies.core.preparePlayback(profileId, titleId),
+        };
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
+  );
+
+  app.post(
     "/api/v1/profiles/:profileId/playback/start",
     {
       schema: {

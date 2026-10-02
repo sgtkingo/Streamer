@@ -271,6 +271,15 @@ describe("provider-neutral content API", () => {
       method: "PUT",
       url: "/api/v1/profiles/default/library/sai%3Atest%3Adynamic-title",
     });
+    const prepared = await instance.inject({
+      method: "POST",
+      url: "/api/v1/profiles/default/playback/prepare",
+      payload: { titleId: "sai:test:dynamic-title" },
+    });
+    const historyBeforePlay = await instance.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default/history",
+    });
     const started = await instance.inject({
       method: "POST",
       url: "/api/v1/profiles/default/playback/start",
@@ -280,6 +289,9 @@ describe("provider-neutral content API", () => {
     expect(discovery.statusCode).toBe(200);
     expect(saved.statusCode).toBe(200);
     expect(saved.json().items[0].title.id).toBe("sai:test:dynamic-title");
+    expect(prepared.statusCode).toBe(200);
+    expect(prepared.json().playback.titleId).toBe("sai:test:dynamic-title");
+    expect(historyBeforePlay.json().items).toHaveLength(0);
     expect(started.statusCode).toBe(200);
     expect(started.json()).toMatchObject({
       playback: {

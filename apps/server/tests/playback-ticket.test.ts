@@ -7,6 +7,7 @@ describe("ephemeral playback tickets", () => {
     const store = new InMemoryPlaybackTicketStore(now);
     const firstPath = store.issue({
       grantId: "grant-one",
+      profileId: "default",
       providerId: "webshare",
       titleId: "title-1",
       variantId: "file-1",
@@ -15,8 +16,9 @@ describe("ephemeral playback tickets", () => {
     });
     const secondPath = store.issue({
       grantId: "grant-two",
+      profileId: "default",
       providerId: "webshare",
-      titleId: "title-2",
+      titleId: "sai:preview:lake-house",
       variantId: "file-2",
       directUrl: "https://cdn.webshare.cz/second",
       expiresAt: "2026-09-28T12:01:00.000Z",
@@ -35,6 +37,17 @@ describe("ephemeral playback tickets", () => {
     expect(redirect.headers.location).toBe("https://cdn.webshare.cz/second");
     expect(redirect.headers["cache-control"]).toContain("no-store");
     expect(redirect.headers["referrer-policy"]).toBe("no-referrer");
+    const history = await app.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default/history",
+    });
+    expect(history.json().items).toHaveLength(1);
+    await app.inject({ method: "GET", url: secondPath });
+    const historyAfterReload = await app.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default/history",
+    });
+    expect(historyAfterReload.json().items).toHaveLength(1);
     await app.close();
   });
 });

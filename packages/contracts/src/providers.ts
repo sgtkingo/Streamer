@@ -451,6 +451,11 @@ export interface MediaProvider {
     candidate: MediaCandidateRef,
     context: ProviderContext,
   ): Promise<MediaVariant>;
+  /** Verifies the source can serve media without minting a playback grant. */
+  checkPlayback?(
+    candidate: MediaCandidateRef,
+    context: ProviderContext,
+  ): Promise<void>;
   createPlayback(
     request: PlaybackRequest,
     context: ProviderContext,

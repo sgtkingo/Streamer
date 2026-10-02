@@ -8,6 +8,7 @@ import type {
 import type { PlaybackGrant, StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
 import { TitleCard } from "./TitleCard";
+import { usePlaybackChecks } from "./usePlaybackChecks";
 
 interface LibraryPageProps {
   api: StreamerApi;
@@ -62,6 +63,7 @@ export function LibraryPage({
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   const historyDialogRef = useRef<HTMLElement>(null);
   const historyCloseRef = useRef<HTMLButtonElement>(null);
+  const playbackChecks = usePlaybackChecks(api, profileId);
 
   const loadLibrary = useCallback(async () => {
     setLibraryLoading(true);
@@ -90,6 +92,25 @@ export function LibraryPage({
   useEffect(() => {
     void loadLibrary();
   }, [loadLibrary, version]);
+
+  useEffect(() => {
+    if (!playbackReady) return;
+    const expiresIn =
+      Date.parse(playbackReady.grant.expiresAt) - Date.now() - 3_000;
+    if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+      setPlaybackReady(null);
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setPlaybackReady((current) =>
+        current?.grant.grantId === playbackReady.grant.grantId ? null : current,
+      );
+      setLibraryNotice(
+        "The verified stream expired. Check it again when you are ready.",
+      );
+    }, expiresIn);
+    return () => window.clearTimeout(timeout);
+  }, [playbackReady]);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -160,20 +181,18 @@ export function LibraryPage({
 
   const play = async (item: CatalogTitle) => {
     if (pendingLibraryAction) return;
+    const streamWindow = window.open("about:blank", "_blank");
     setPendingLibraryAction({ titleId: item.id, kind: "play" });
     setLibraryError("");
     setLibraryNotice("");
     setPlaybackReady(null);
     try {
-      const response = await api.startPlayback(profileId, item.id);
-      setPlaybackReady({ title: item.title, grant: response.playback });
-      setLibraryNotice(
-        `${item.title} is ready from the verified streaming source.`,
-      );
-      await loadLibrary();
-      if (historyOpen) await loadHistory();
+      const response = await api.preparePlayback(profileId, item.id);
+      if (streamWindow) streamWindow.location.replace(response.playback.url);
+      else setPlaybackReady({ title: item.title, grant: response.playback });
     } catch (error) {
-      setLibraryError(safeErrorMessage(error));
+      streamWindow?.close();
+      playbackChecks.markFailed(item.id, safeErrorMessage(error));
     } finally {
       setPendingLibraryAction(null);
     }
@@ -393,19 +412,9 @@ export function LibraryPage({
         <p className="page-message" role="status">
           {libraryNotice}
           {playbackReady && (
-            <>
-              {" "}
-              <a
-                href={playbackReady.grant.url}
-                rel="noreferrer"
-                className="playback-link"
-              >
-                Open stream
-              </a>
-              <small>
-                Link expires {formatExpiry(playbackReady.grant.expiresAt)}.
-              </small>
-            </>
+            <small>
+              Ready until {formatExpiry(playbackReady.grant.expiresAt)}.
+            </small>
           )}
         </p>
       )}
@@ -432,6 +441,8 @@ export function LibraryPage({
               key={entry.title.id}
               item={entry.title}
               onPlay={play}
+              onCheck={playbackChecks.check}
+              playbackCheck={playbackChecks.states.get(entry.title.id)}
               onAdd={() => undefined}
               onRemove={remove}
               pendingAction={
@@ -440,6 +451,11 @@ export function LibraryPage({
                   : undefined
               }
               playbackEnabled={playbackEnabled}
+              playbackUrl={
+                playbackReady?.grant.titleId === entry.title.id
+                  ? playbackReady.grant.url
+                  : undefined
+              }
             />
           ))}
         </div>

@@ -69,8 +69,9 @@ or closed `sessionId` returns `DISCOVERY_SESSION_NOT_FOUND`.
 | `GET` | `/profiles/:profileId/history` | List newest playback events. |
 | `DELETE` | `/profiles/:profileId/history/:eventId` | Remove one history event. |
 | `POST` | `/profiles/:profileId/history/clear` | Clear history after an explicit confirmation token. |
-| `POST` | `/profiles/:profileId/playback/start` | Verify playability, add to Library and append History. |
-| `GET` | `/playback/grants/:grantId` | Resolve an unexpired in-memory playback ticket. |
+| `POST` | `/profiles/:profileId/playback/prepare` | Recheck the source and issue a short lived grant without changing Library or History. |
+| `POST` | `/profiles/:profileId/playback/start` | Legacy one-call prepare and start for clients that do not use the two-stage flow. |
+| `GET` | `/playback/grants/:grantId` | Open an unexpired grant and record the first playback start. Reopening the same grant does not duplicate History. |
 | `DELETE` | `/playback/grants/:grantId` | Stop/revoke the active ticket. |
 
 Playback body:
@@ -81,13 +82,15 @@ Playback body:
 }
 ```
 
-Playback is disabled in preview mode. A live coordinator must recheck the media
-variant and return a future-expiring grant before Library or History changes.
-Webshare direct URLs are retained only by the in-memory ticket store; the
-browser receives `/api/v1/playback/grants/:grantId`. Issuing a new grant revokes
-the previous one. Unknown titles return `TITLE_NOT_FOUND`; unavailable titles
-return `TITLE_NOT_PLAYABLE`; missing live media composition returns
-`PLAYBACK_NOT_CONFIGURED`.
+Playback is disabled in preview mode. The UI calls `prepare`, which reinspects
+the selected file, obtains a Webshare VIP link and requires a successful
+one-byte HTTP Range response (`206`). While this runs, Play is disabled. The
+response contains a short-lived same-origin grant. Following its URL records
+the playback start once and redirects to the media. Preparing alone does not
+change Library or History. Webshare direct URLs stay only in the in-memory
+ticket store, and issuing a new grant revokes the previous one. Unknown titles
+return `TITLE_NOT_FOUND`; unavailable titles return `TITLE_NOT_PLAYABLE`;
+missing live media composition returns `PLAYBACK_NOT_CONFIGURED`.
 
 History clear accepts `{ "confirmationToken": "clear-history" }`. Clearing
 History never removes Library membership.
