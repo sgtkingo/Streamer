@@ -12,7 +12,9 @@ import { usePlaybackChecks } from "./usePlaybackChecks";
 interface HomePageProps {
   api: StreamerApi;
   profileId: string;
+  version?: number;
   onLibraryChanged: () => void;
+  onPlaybackReady: (item: CatalogTitle, grant: PlaybackGrant) => void;
 }
 
 const stageLabels = [
@@ -30,18 +32,19 @@ interface PendingAction {
   kind: "play" | "add";
 }
 
-interface ReadyPlayback {
-  title: string;
-  grant: PlaybackGrant;
-}
-
 interface ConversationTurn {
   id: string;
   role: "user" | "assistant";
   text: string;
 }
 
-export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
+export function HomePage({
+  api,
+  profileId,
+  version,
+  onLibraryChanged,
+  onPlaybackReady,
+}: HomePageProps) {
   const [feed, setFeed] = useState<HomeFeed | null>(null);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<DiscoveryUiResponse | null>(null);
@@ -51,9 +54,6 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
   const [notice, setNotice] = useState("");
   const [announcement, setAnnouncement] = useState("");
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(
-    null,
-  );
-  const [readyPlayback, setReadyPlayback] = useState<ReadyPlayback | null>(
     null,
   );
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
@@ -74,7 +74,7 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
 
   useEffect(() => {
     void loadHome();
-  }, [loadHome]);
+  }, [loadHome, version]);
 
   useEffect(() => {
     if (!feed || !window.location.hash) return;
@@ -93,27 +93,6 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
     resultsHeadingRef.current?.focus();
   }, [result]);
 
-  useEffect(() => {
-    if (!readyPlayback) return;
-    const expiresIn =
-      Date.parse(readyPlayback.grant.expiresAt) - Date.now() - 3_000;
-    if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
-      setReadyPlayback(null);
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      setReadyPlayback((current) =>
-        current?.grant.grantId === readyPlayback.grant.grantId ? null : current,
-      );
-      setNotice((current) =>
-        current.includes(readyPlayback.title)
-          ? "The verified stream expired. Check it again when you are ready."
-          : current,
-      );
-    }, expiresIn);
-    return () => window.clearTimeout(timeout);
-  }, [readyPlayback]);
-
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     const message = query.trim();
@@ -121,7 +100,6 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
     setIsSearching(true);
     setError("");
     setNotice("");
-    setReadyPlayback(null);
     setAnnouncement("StreamerAI is finding and validating titles.");
     try {
       const response = await api.discover({
@@ -173,15 +151,12 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
 
   const play = async (item: CatalogTitle) => {
     if (pendingAction) return;
-    const streamWindow = window.open("about:blank", "_blank");
     setPendingAction({ titleId: item.id, kind: "play" });
     setError("");
     try {
       const response = await api.preparePlayback(profileId, item.id);
-      if (streamWindow) streamWindow.location.replace(response.playback.url);
-      else setReadyPlayback({ title: item.title, grant: response.playback });
+      onPlaybackReady(item, response.playback);
     } catch (actionError) {
-      streamWindow?.close();
       playbackChecks.markFailed(item.id, safeErrorMessage(actionError));
     } finally {
       setPendingAction(null);
@@ -190,11 +165,6 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
 
   const pendingFor = (item: CatalogTitle) =>
     pendingAction?.titleId === item.id ? pendingAction.kind : undefined;
-
-  const playbackUrlFor = (item: CatalogTitle) =>
-    readyPlayback?.grant.titleId === item.id
-      ? readyPlayback.grant.url
-      : undefined;
 
   const resultMode = result?.mode ?? "preview";
   const availableResults =
@@ -285,11 +255,6 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
       {notice && (
         <p className="page-message" role="status">
           {notice}
-          {readyPlayback && (
-            <small>
-              Ready until {formatExpiry(readyPlayback.grant.expiresAt)}.
-            </small>
-          )}
         </p>
       )}
 
@@ -338,7 +303,6 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
               )}
               onAdd={add}
               playbackEnabled={resultMode === "live"}
-              playbackUrl={playbackUrlFor(result.bestMatch.title)}
               pendingAction={pendingFor(result.bestMatch.title)}
             />
           )}
@@ -356,7 +320,6 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     playbackCheck={playbackChecks.states.get(title.id)}
                     onAdd={add}
                     playbackEnabled={resultMode === "live"}
-                    playbackUrl={playbackUrlFor(title)}
                     pendingAction={pendingFor(title)}
                   />
                 ))}
@@ -449,7 +412,6 @@ export function HomePage({ api, profileId, onLibraryChanged }: HomePageProps) {
                     playbackCheck={playbackChecks.states.get(item.id)}
                     onAdd={add}
                     playbackEnabled={feed.mode === "live"}
-                    playbackUrl={playbackUrlFor(item)}
                     pendingAction={pendingFor(item)}
                   />
                 ))}
@@ -492,11 +454,4 @@ function discoveryTitles(result: DiscoveryUiResponse): CatalogTitle[] {
     ...result.unverified.map((item) => item.title),
   ];
   return [...new Map(titles.map((title) => [title.id, title])).values()];
-}
-
-function formatExpiry(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? "soon"
-    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }

@@ -126,7 +126,7 @@ describe("provider-neutral content API", () => {
     expect(history.json().items).toHaveLength(0);
   });
 
-  it("never offers playback for an unavailable title", async () => {
+  it("never offers playback for a preview-only title", async () => {
     const result = await app().inject({
       method: "POST",
       url: "/api/v1/profiles/default/playback/start",
@@ -135,7 +135,7 @@ describe("provider-neutral content API", () => {
 
     expect(result.statusCode).toBe(409);
     expect(result.json()).toMatchObject({
-      error: { code: "TITLE_NOT_PLAYABLE" },
+      error: { code: "PLAYBACK_NOT_CONFIGURED" },
     });
   });
 

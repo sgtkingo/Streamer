@@ -28,6 +28,10 @@ import {
   type PlaybackTicketStore,
 } from "./services/playback-ticket-store.js";
 import {
+  FfmpegPlaybackMediaEngine,
+  type PlaybackMediaEngine,
+} from "./services/playback-media-engine.js";
+import {
   SqliteIntegrationStateStore,
   type IntegrationStateStore,
 } from "./stores/integration-state-store.js";
@@ -53,6 +57,7 @@ export interface CreateAppOptions {
   contentProvider?: StreamerContentProvider;
   runtimeConfig?: RuntimeConfig;
   playbackTicketStore?: PlaybackTicketStore;
+  playbackMediaEngine?: PlaybackMediaEngine;
 }
 
 function defaultFetch(): FetchLike {
@@ -132,6 +137,11 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
   const stores = createStores(options, database, environment, runtimeConfig);
   const playbackTicketStore =
     options.playbackTicketStore ?? new InMemoryPlaybackTicketStore(now);
+  const webshareClient = new WebshareClient({
+    secretStore: stores.secretStore,
+    fetch: options.providerFetch ?? defaultProviderFetch(),
+    timeoutMs: 8_000,
+  });
   const contentProvider =
     options.contentProvider ??
     (environment === "production"
@@ -149,11 +159,7 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
             now,
           }),
           media: new WebshareMediaProvider({
-            client: new WebshareClient({
-              secretStore: stores.secretStore,
-              fetch: options.providerFetch ?? defaultProviderFetch(),
-              timeoutMs: 8_000,
-            }),
+            client: webshareClient,
             issuePlaybackTicket: (input) => playbackTicketStore.issue(input),
             now,
           }),
@@ -221,7 +227,16 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
     now,
   });
   registerContentRoutes(app, { core });
-  registerPlaybackRoutes(app, playbackTicketStore, core);
+  registerPlaybackRoutes(
+    app,
+    playbackTicketStore,
+    core,
+    options.playbackMediaEngine ?? new FfmpegPlaybackMediaEngine(),
+    async (ticket) =>
+      ticket.providerId === "webshare"
+        ? webshareClient.createVideoLink(ticket.variantId)
+        : ticket.directUrl,
+  );
   registerInferenceRoutes(app, {
     fetch: options.inferenceFetch ?? defaultInferenceFetch(),
     config: runtimeConfig.inference,

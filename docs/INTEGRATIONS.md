@@ -31,6 +31,7 @@ export interface StreamerContentProvider {
     completedAt: string,
     context?: DiscoveryConversationContext,
   ): Promise<DiscoveryResponse>;
+  checkPlayback?(profileId: string, title: CatalogTitle): Promise<void>;
   preparePlayback?(
     profileId: string,
     title: CatalogTitle,
@@ -149,8 +150,11 @@ canonical records, expose provider credentials to the browser, or treat search
 results as playable before a final recheck.
 
 The ticket store is deliberately memory-only and holds at most one active
-playback grant. A redirect uses `Cache-Control: no-store` and
-`Referrer-Policy: no-referrer`; issuing another grant revokes the prior one.
+playback grant. The in-app player uses the same-origin `PlaybackMediaEngine`
+boundary for probing, audio selection, fragmented MP4, thumbnails and embedded
+text subtitles. The default implementation invokes FFmpeg without a shell and
+does not return Webshare's direct URL. Issuing another grant revokes the prior
+one. The legacy redirect remains for older clients.
 
 ## Agent and search providers
 

@@ -36,3 +36,14 @@
 - Pokud uživatel zadá např. "Něco co jsem neviděl" tak by si agent měl zažádat o seznam filmů které už uživatel viděl a vyhnout se jim. Pokud je konktextové okno malé, komprimovat. 
 
 - Má agent SOUL, SKILLS apod? 
+
+V návaznosti na to by se mělo u dláždic vypsat jaký je dostupný jazyk, s tím že: 
+- Primární je vždy uživatelský jazyk který nastavil na prostředí, třeba CZ 
+- Sekundární se hledá ENG, s titulky v lokálním jazyce 
+- Pokud není nalezena ani jedna varianta, objeví se dostupný jazyk, a pokud nemá tiulky tak s vykřičníkem 
+- Příklad:
+  - Film je v CZ i ENG s titulky, UI : CZ, ENG (sub)
+  - Film je jen ENG, ale s titulky, UI: ENG (sub)
+  - Film je  v ENG bez titulku, UI: ENG
+  - Film je jen v japonštině, ale má sub, UI: JAP (sub)
+  - Film je japonsky, bez titulku, UI: JAP (!)

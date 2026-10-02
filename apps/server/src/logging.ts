@@ -27,12 +27,15 @@ export const LOG_REDACTION_PATHS = [
 
 function requestSerializer(request: Record<string, unknown>) {
   const rawUrl = typeof request.url === "string" ? request.url : undefined;
+  const path = rawUrl
+    ?.split("?", 1)[0]
+    ?.replace(/(\/api\/v1\/playback\/grants\/)[^/]+/g, "$1[REDACTED]");
 
   return {
     id: request.id,
     method: request.method,
     // Query values can contain accidentally supplied secrets. Keep only path.
-    url: rawUrl?.split("?", 1)[0],
+    url: path,
     host: request.host,
     remoteAddress: request.remoteAddress,
     remotePort: request.remotePort,

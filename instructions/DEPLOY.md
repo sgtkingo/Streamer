@@ -14,7 +14,7 @@ revision must be reviewed against it before reuse.
 2. Ship the UI as a PWA, but run discovery sessions, provider access, scraping, background jobs, media handling, and AI orchestration in the home node — never in the browser.
 3. Keep the complete local state in **SQLite in WAL mode**. The film database is a sparse, provenance-aware on-demand store, not a full upstream mirror. At this scale PostgreSQL, Redis, and Kubernetes would add operational cost without a useful benefit.
 4. Run local inference behind an internal, provider-neutral inference gateway. Use Ollama for the MVP; allow an OpenAI-compatible remote endpoint later without changing domain logic.
-5. Integrate Webshare as a provider adapter. Prefer a just-in-time direct video link, with a same-origin Range relay as a tested fallback. Do not assume transcoding is performed by Webshare.
+5. Integrate Webshare as a provider adapter. Obtain a just-in-time private video link, then serve it through the home server's FFmpeg media gateway to the integrated player. Do not assume transcoding is performed by Webshare.
 6. Build the catalog incrementally from conversational discovery. Model and web-search results are candidate hints; only metadata-validated canonical records enter the local database and result ranking.
 7. Propose TMDB as the canonical metadata source for the non-commercial MVP, with required attribution. Keep ČSFD as an optional, isolated enrichment connector. Do not use IMDb.
 8. Do not automate Rotten Tomatoes scraping without written authorization: its current terms prohibit automated collection and scraping. Use TMDB or ČSFD ratings with explicit provenance. Web search may locate another authorized rating source, but a search-result snippet is never itself accepted as a rating; when no authorized rating exists, display `Not rated` instead of inventing one.
@@ -34,12 +34,14 @@ flowchart LR
     A --> DB[(Local SQLite + FTS5)]
     A --> FS[Poster and response cache]
     A --> D[Discovery orchestrator]
+    A --> MG[FFmpeg media gateway]
     D --> AG[Agent gateway]
     D --> M[Metadata validator]
     D --> W[Webshare availability adapter]
     D --> SUB[Subtitle provider registry]
     D --> S[Approved SearchProvider]
     W --> WS[Webshare API / media]
+    MG --> WS
     SUB --> EMB[Embedded subtitle tracks]
     SUB -. optional .-> EXT[Future external subtitle adapter]
     M --> TMDB[Authorized canonical source]
@@ -49,13 +51,12 @@ flowchart LR
     S -. optional authorized queries .-> WEB[Web search API]
     A -. optional user-state sync over TLS .-> CW[Cloudflare Worker]
     CW --> D1[(Cloudflare D1, EU)]
-    C -. direct-link fast path after capability test .-> WS
 ```
 
 ### Trust boundaries
 
-- The browser uses the StreamerAI origin for every application API. Only after the direct-play capability test may a playback ticket redirect the media element to a fresh, short-lived Webshare link; the browser never receives the Webshare password, WST session token, model-management access, or Cloudflare administrative credentials.
-- The app is the only component allowed to call provider APIs and the agent gateway. A verified direct media fetch is the sole browser-to-provider exception.
+- The browser uses the StreamerAI origin for application APIs and in-app media. FFmpeg runs on the home server; the browser never receives the Webshare direct link, password, WST session token, model-management access, or Cloudflare administrative credentials.
+- The app is the only component allowed to call provider APIs and the agent gateway.
 - The model receives bounded task input and sanitized validated facts, not credentials, stream URLs, raw cookies, or unrestricted database access.
 - Model memory and web-search snippets may propose candidates but are never a source of record. Unresolved candidates cannot reach the result UI or later ranking.
 - Cloud sync receives no provider credentials, model prompts, media URLs, full catalog mirror, posters, or media files.
@@ -74,7 +75,7 @@ flowchart LR
 | Integration registry | Capability-based typed adapters | Additional databases, media services and subtitle sources do not change domain logic |
 | Local inference | Ollama through the app-owned agent gateway | Easiest GPU-aware MVP runtime on Windows/Linux |
 | Reverse proxy | Caddy | Single HTTPS origin, security headers, optional internal CA |
-| Media fallback | Streaming HTTP Range relay; FFmpeg only as an optional later profile | Direct play stays cheap while incompatible media has an upgrade path |
+| Media gateway | FFmpeg remux or transcode to a same-origin fragmented MP4 stream | Handles downloaded containers and selected audio tracks in the web player |
 | Cloud sync | Optional Cloudflare Worker + D1 | Free tier is ample for small user-state sync |
 | Tests | Vitest, adapter contract tests, Playwright E2E, AI evaluation fixtures | External HTML/API and AI behavior require regression coverage |
 
@@ -210,27 +211,30 @@ Webshare often reports application errors inside an HTTP 200 XML response. The a
 6. Save the selected `file_ident`, confidence, rationale codes, and alternatives; retain a manual correction path.
 7. For a series, match and store availability per expected episode. A season pack or filename is not proof that all episodes exist.
 
-### 6.3 Direct-first playback
+### 6.3 In-app playback
 
 At play time:
 
 1. Verify the file with `file_info`.
 2. Request a fresh HTTPS link through `file_link(download_type=video_stream)`.
-3. If an installation-time capability test proves normal playback and seeking work, respond with a short-lived, single-purpose local playback ticket that resolves to a `302` direct-link fast path. Mark the redirect response `Cache-Control: no-store` and use a no-referrer policy; never place the direct URL in application logs or persistent state.
-4. If direct playback fails, use the same-origin Range relay. It accepts only an internal `file_ident`, validates the returned URL against an HTTPS Webshare host allowlist, streams without full buffering, and forwards `Range`, `If-Range`, `206`, `Content-Range`, `Content-Length`, `Content-Type`, and `Accept-Ranges` correctly.
-5. If the container is unsupported but streams are compatible, a later media profile may remux. Audio transcoding is the next fallback; video transcoding is last because it is the most expensive.
+3. Issue a short-lived same-origin grant. The browser opens an integrated player and requests a media manifest; the home server probes the selected file with FFprobe.
+4. Serve fragmented MP4 from FFmpeg through the same origin. Remux H.264 when possible, convert other video codecs to H.264, and convert the selected audio stream to AAC while preserving its channel layout. Seeking or changing audio starts a new media response at the requested timestamp.
+5. Generate bounded JPEG timeline previews on demand. Expose text-based embedded subtitles as WebVTT; local SRT, VTT, ASS and SSA files are converted in the browser and remain local. Bitmap subtitles require a later OCR or subtitle-source integration.
+6. Keep the direct provider URL only in the ephemeral server ticket. Close or replace the ticket when playback ends. The legacy redirect endpoint remains for older clients but is not used by the integrated player.
+7. Refresh the Webshare link on subsequent media requests when its short server cache expires; do not rely on the initial link remaining valid for a full film.
 
-The MVP does not promise universal MKV/HEVC/AC3/DTS playback. That promise is gated by the integration spike below. Exactly one active playback session is enforced for the initial scope.
+Exactly one active playback session is enforced for the initial scope. Playback quality and supported source codecs remain subject to the real-account and browser trial below.
 
 ### 6.4 Mandatory Webshare spike
 
 Before treating playback as implemented, run contract tests with a real user-owned/authorized account:
 
 - request `Range: bytes=0-0` and verify `206`, `Content-Range`, and `Accept-Ranges`;
-- seek forward/backward in the browser;
+- seek forward/backward in the integrated browser player and compare the actual frame position;
 - establish link TTL and whether a link works from another LAN device;
 - refresh on `401`, `403`, and expired/missing link responses;
-- test MP4/H.264/AAC, MKV/H.264, HEVC, and common AC3/DTS variants;
+- test MP4/H.264/AAC, MKV/H.264, HEVC, AC3/DTS and 2.0/2.1/5.1/7.1 audio variants through FFmpeg;
+- test embedded text subtitles, local subtitle import, timeline thumbnails and long playback sessions;
 - confirm practical API search pagination and throttling behavior;
 - verify that provider flags and access restrictions are honored.
 
@@ -365,8 +369,8 @@ Expected degraded behavior:
 | Candidate cannot be validated | Hide it from results and retain only a bounded diagnostic counter |
 | Streaming provider check fails | Mark availability unknown; never convert the outage to unavailable |
 | Cloudflare unavailable/over limit | Local writes continue and outbox waits |
-| Direct Webshare link fails | Refresh once, then try Range relay, then report a clear provider error |
-| Unsupported codec | Offer another candidate; optional remux/transcode only if enabled |
+| Direct Webshare link fails | Refresh the private link once, then report a clear provider error |
+| Unsupported codec | Transcode on the home server where practical; otherwise offer another candidate |
 | Remote inference unavailable | Do not silently send to another provider; fall back to local/deterministic behavior |
 
 ## 12. Updates, backup, and rollback
@@ -466,7 +470,7 @@ Owner-directed and previously approved decisions:
 - [x] TMDB as proposed canonical non-commercial metadata source; optional isolated ČSFD enrichment; no IMDb.
 - [x] Rotten Tomatoes automation disabled unless written authorization is obtained.
 - [x] Provider-neutral web-search interface, with optional Brave Search as the first supported adapter and no new dependency on the retiring Google Custom Search API.
-- [x] Webshare direct-first playback with tested Range relay fallback; transcoding postponed until the codec spike proves it necessary.
+- [x] Webshare ticket and FFmpeg-backed in-app player; real-account codec, seek and subtitle trials remain release gates.
 - [x] Optional Cloudflare Worker + D1 EU sync for small user state only; all provider secrets remain local.
 - [x] Provider-neutral AI gateway with local Qwen 4B default and explicit remote opt-in, as detailed in `LOCAL_AGENT.md`.
 

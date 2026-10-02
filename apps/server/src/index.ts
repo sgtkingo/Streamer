@@ -105,3 +105,8 @@ export {
   type PlaybackTicketRecord,
   type PlaybackTicketStore,
 } from "./services/playback-ticket-store.js";
+export {
+  FfmpegPlaybackMediaEngine,
+  type PlaybackMediaEngine,
+  type PlaybackMediaStream,
+} from "./services/playback-media-engine.js";

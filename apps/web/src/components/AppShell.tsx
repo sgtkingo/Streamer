@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import type { CatalogTitle, PlaybackGrant } from "@streamer-ai/contracts";
 import type { StreamerApi } from "../api/client";
 import { Brand } from "./Brand";
 import { HomePage } from "./HomePage";
 import { LibraryPage } from "./LibraryPage";
+import { VideoPlayer } from "./VideoPlayer";
 
 type Route = "home" | "library";
 
@@ -21,6 +23,10 @@ export function AppShell({
 }) {
   const [route, setRoute] = useState<Route>(routeFromLocation);
   const [libraryVersion, setLibraryVersion] = useState(0);
+  const [activePlayback, setActivePlayback] = useState<{
+    title: CatalogTitle;
+    grant: PlaybackGrant;
+  } | null>(null);
   const profileId = "default";
 
   useEffect(() => {
@@ -86,7 +92,11 @@ export function AppShell({
         <HomePage
           api={api}
           profileId={profileId}
+          version={libraryVersion}
           onLibraryChanged={() => setLibraryVersion((value) => value + 1)}
+          onPlaybackReady={(title, grant) =>
+            setActivePlayback({ title, grant })
+          }
         />
       ) : (
         <LibraryPage
@@ -95,6 +105,20 @@ export function AppShell({
           version={libraryVersion}
           onBackHome={() => navigate("home")}
           playbackEnabled={playbackEnabled}
+          onPlaybackReady={(title, grant) =>
+            setActivePlayback({ title, grant })
+          }
+        />
+      )}
+      {activePlayback && (
+        <VideoPlayer
+          api={api}
+          title={activePlayback.title}
+          grant={activePlayback.grant}
+          onClose={() => {
+            setActivePlayback(null);
+            setLibraryVersion((value) => value + 1);
+          }}
         />
       )}
     </div>

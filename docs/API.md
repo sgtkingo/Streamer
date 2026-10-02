@@ -69,9 +69,15 @@ or closed `sessionId` returns `DISCOVERY_SESSION_NOT_FOUND`.
 | `GET` | `/profiles/:profileId/history` | List newest playback events. |
 | `DELETE` | `/profiles/:profileId/history/:eventId` | Remove one history event. |
 | `POST` | `/profiles/:profileId/history/clear` | Clear history after an explicit confirmation token. |
+| `POST` | `/profiles/:profileId/playback/check` | Verify a tile asynchronously without issuing a grant or recording History. |
 | `POST` | `/profiles/:profileId/playback/prepare` | Recheck the source and issue a short lived grant without changing Library or History. |
 | `POST` | `/profiles/:profileId/playback/start` | Legacy one-call prepare and start for clients that do not use the two-stage flow. |
-| `GET` | `/playback/grants/:grantId` | Open an unexpired grant and record the first playback start. Reopening the same grant does not duplicate History. |
+| `GET` | `/playback/grants/:grantId/manifest` | Probe the selected media and list duration, audio tracks and extractable text subtitles. |
+| `GET` | `/playback/grants/:grantId/media?audio=2&start=31.500` | Stream browser-compatible fragmented MP4 with selected audio and a start offset. First request records playback once. |
+| `POST` | `/playback/grants/:grantId/progress` | Save `{ "progressPercent": 37.5 }` for Continue Watching and resume. Requires a started ticket. |
+| `GET` | `/playback/grants/:grantId/thumbnail?at=30` | Generate a small JPEG preview near the requested second. |
+| `GET` | `/playback/grants/:grantId/subtitles/:streamIndex` | Convert an embedded text subtitle track to WebVTT. |
+| `GET` | `/playback/grants/:grantId` | Legacy direct redirect, retained for older clients. |
 | `DELETE` | `/playback/grants/:grantId` | Stop/revoke the active ticket. |
 
 Playback body:
@@ -82,15 +88,30 @@ Playback body:
 }
 ```
 
-Playback is disabled in preview mode. The UI calls `prepare`, which reinspects
+Playback is disabled in preview mode. Live tiles call `check` automatically;
+Play becomes available only after that check succeeds. `prepare` reinspects
 the selected file, obtains a Webshare VIP link and requires a successful
-one-byte HTTP Range response (`206`). While this runs, Play is disabled. The
-response contains a short-lived same-origin grant. Following its URL records
-the playback start once and redirects to the media. Preparing alone does not
-change Library or History. Webshare direct URLs stay only in the in-memory
-ticket store, and issuing a new grant revokes the previous one. Unknown titles
-return `TITLE_NOT_FOUND`; unavailable titles return `TITLE_NOT_PLAYABLE`;
-missing live media composition returns `PLAYBACK_NOT_CONFIGURED`.
+one-byte HTTP Range response (`206`). The browser opens the in-app player and
+requests the manifest, then the media endpoint. The server uses FFmpeg to
+remux or transcode the chosen source; the direct Webshare URL remains only in
+the in-memory ticket store and never reaches the browser. A first media
+request records History and extends the active session for a film-length
+window. Seeking or switching audio restarts the media response at the chosen
+position. The server refreshes the private provider link for later media
+requests, so an expired direct link does not break a seek. Local subtitle files
+are converted to WebVTT in browser memory.
+Only text-based embedded subtitles can be extracted; bitmap tracks are omitted.
+Issuing a new grant revokes the previous one. Errors use stable codes such as
+`PLAYBACK_GRANT_EXPIRED` and `PLAYBACK_MEDIA_UNAVAILABLE`.
+
+Playback diagnostics are structured server logs (`docker compose logs -f --tail=200 server`):
+manifest readiness/failure, stream start/finish/failure,
+thumbnail and subtitle failures. They include only fixed event/failure codes,
+processing phase, counts and numeric FFmpeg exit/byte values. Raw FFmpeg
+stderr, provider URLs, exception messages and playback grant IDs are never
+logged. The server masks grant IDs in request paths, and Nginx disables route
+access/error logging for playback-grant routes. A browser-side media error remains visible
+in the player but is not persisted as a client log.
 
 History clear accepts `{ "confirmationToken": "clear-history" }`. Clearing
 History never removes Library membership.
@@ -142,9 +163,9 @@ salt, WST or account identifier.
   coordinator. The model proposes bounded candidates; TMDB verifies canonical
   facts and explicitly named people, then Webshare verifies playable files and
   formats before a title reaches the response.
-- The Webshare transport, guided `salt`/`login` exchange and normalized
-  `MediaProvider` adapter are implemented. The real-account playback/Range
-  seeking/Range capability spike remains a release gate; no endpoint accepts a
+- The Webshare transport, guided `salt`/`login` exchange, normalized
+  `MediaProvider` adapter and FFmpeg media gateway are implemented. A real-account
+  browser playback and seek trial remains a release gate; no endpoint accepts a
   caller-supplied WST or returns it to the browser.
 
 ## Versioning rules

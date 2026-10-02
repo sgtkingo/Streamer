@@ -9,11 +9,12 @@ import type {
   PublicIntegrationErrorCode,
   SetupProfile,
   PlaybackGrant as PlaybackGrantContract,
+  PlaybackMediaInfo,
   IntegrationId,
 } from "@streamer-ai/contracts";
 
 export type ConnectionState = "connected" | "not-configured" | "unavailable";
-export type { PlaybackGrant } from "@streamer-ai/contracts";
+export type { PlaybackGrant, PlaybackMediaInfo } from "@streamer-ai/contracts";
 export type ProfileDraft = SetupProfile;
 export type ConnectionResult = IntegrationConnectionResult;
 
@@ -78,6 +79,9 @@ export interface StreamerApi {
     profileId: string,
     titleId: string,
   ): Promise<PlaybackCheckResult>;
+  getPlaybackManifest(grantId: string): Promise<PlaybackMediaInfo>;
+  closePlayback(grantId: string): Promise<void>;
+  savePlaybackProgress(grantId: string, progressPercent: number): Promise<void>;
 }
 
 class ApiError extends Error {
@@ -100,6 +104,10 @@ const domainErrorMessages: Record<string, string> = {
     "Connect a streaming source before starting playback.",
   PLAYBACK_RECHECK_FAILED:
     "Sorry, this title is currently unavailable. Try checking again in a moment.",
+  PLAYBACK_GRANT_EXPIRED:
+    "The playback session expired. Press Play on the title to start again.",
+  PLAYBACK_MEDIA_UNAVAILABLE:
+    "This video could not be opened. Try another title or stream later.",
   PROFILE_NOT_FOUND:
     "This profile is not available. Finish setup or choose another profile.",
   HISTORY_EVENT_NOT_FOUND: "That history item no longer exists.",
@@ -412,6 +420,19 @@ export const apiClient: StreamerApi = {
       `/profiles/${encodeURIComponent(profileId)}/playback/check`,
       { method: "POST", body: JSON.stringify({ titleId }) },
     ),
+  getPlaybackManifest: (grantId) =>
+    request<PlaybackMediaInfo>(
+      `/playback/grants/${encodeURIComponent(grantId)}/manifest`,
+    ),
+  closePlayback: (grantId) =>
+    request<void>(`/playback/grants/${encodeURIComponent(grantId)}`, {
+      method: "DELETE",
+    }),
+  savePlaybackProgress: (grantId, progressPercent) =>
+    request<void>(`/playback/grants/${encodeURIComponent(grantId)}/progress`, {
+      method: "POST",
+      body: JSON.stringify({ progressPercent }),
+    }),
 };
 
 export function safeErrorMessage(error: unknown): string {

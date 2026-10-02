@@ -69,6 +69,7 @@ describe("system API", () => {
         environment: "production",
         logger: false,
         fetch: unusedFetch,
+        databaseFilename: ":memory:",
       }),
     ).toThrow(/persistent SecretStore/);
   });

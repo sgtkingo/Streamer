@@ -398,13 +398,18 @@ export class StreamerCore {
     if (item === null) throw new UnknownTitleError(titleId);
     const now = this.now().toISOString();
     const eventId = randomUUID();
+    const previousEntry = this.database.library.get(profileId, titleId);
+    const previousProgress =
+      previousEntry?.state === "completed"
+        ? 0
+        : (previousEntry?.progressPercent ?? 0);
     this.database.transaction(() => {
       this.database.library.upsert({
         profileId,
         titleId,
         membershipReason: "playback",
         state: "in-progress",
-        progressPercent: 0,
+        progressPercent: previousProgress,
         lastPlayedAt: now,
       });
       this.database.history.append({
@@ -416,11 +421,31 @@ export class StreamerCore {
           item.kind === "series"
             ? (item.seriesCoverage?.nextEpisodeLabel ?? null)
             : null,
-        progressPercent: 0,
+        progressPercent: previousProgress,
         occurredAt: now,
       });
     });
     return { eventId, library: this.library(profileId) };
+  }
+
+  recordPlaybackProgress(
+    profileId: string,
+    titleId: string,
+    progressPercent: number,
+  ): void {
+    this.requireProfile(profileId);
+    if (this.database.titles.get(titleId) === null) {
+      throw new UnknownTitleError(titleId);
+    }
+    const bounded = Math.max(0, Math.min(100, progressPercent));
+    this.database.library.upsert({
+      profileId,
+      titleId,
+      membershipReason: "playback",
+      state: bounded >= 95 ? "completed" : "in-progress",
+      progressPercent: bounded,
+      lastPlayedAt: this.now().toISOString(),
+    });
   }
 
   history(profileId: string): HistoryResponse {

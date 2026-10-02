@@ -27,10 +27,21 @@ describe("application logger", () => {
       },
       "redaction check",
     );
+    logger.info(
+      {
+        req: {
+          method: "GET",
+          url: `/api/v1/playback/grants/${TEST_TOKEN}/media?audio=2`,
+        },
+      },
+      "playback request",
+    );
 
     expect(output).not.toContain(TEST_TOKEN);
     expect(output).not.toContain("Provider rejected");
     expect(output).not.toContain("?token=");
+    expect(output).not.toContain(`/grants/${TEST_TOKEN}`);
+    expect(output).toContain("/grants/[REDACTED]/media");
     expect(output).toContain("[REDACTED]");
   });
 });

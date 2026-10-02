@@ -16,6 +16,7 @@ interface LibraryPageProps {
   version: number;
   onBackHome: () => void;
   playbackEnabled: boolean;
+  onPlaybackReady: (item: CatalogTitle, grant: PlaybackGrant) => void;
 }
 
 type KindFilter = "all" | "movie" | "series";
@@ -33,15 +34,12 @@ export function LibraryPage({
   version,
   onBackHome,
   playbackEnabled,
+  onPlaybackReady,
 }: LibraryPageProps) {
   const [library, setLibrary] = useState<LibraryResponse | null>(null);
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [libraryError, setLibraryError] = useState("");
   const [libraryNotice, setLibraryNotice] = useState("");
-  const [playbackReady, setPlaybackReady] = useState<{
-    title: string;
-    grant: PlaybackGrant;
-  } | null>(null);
   const [pendingLibraryAction, setPendingLibraryAction] =
     useState<PendingLibraryAction | null>(null);
 
@@ -92,25 +90,6 @@ export function LibraryPage({
   useEffect(() => {
     void loadLibrary();
   }, [loadLibrary, version]);
-
-  useEffect(() => {
-    if (!playbackReady) return;
-    const expiresIn =
-      Date.parse(playbackReady.grant.expiresAt) - Date.now() - 3_000;
-    if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
-      setPlaybackReady(null);
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      setPlaybackReady((current) =>
-        current?.grant.grantId === playbackReady.grant.grantId ? null : current,
-      );
-      setLibraryNotice(
-        "The verified stream expired. Check it again when you are ready.",
-      );
-    }, expiresIn);
-    return () => window.clearTimeout(timeout);
-  }, [playbackReady]);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -181,17 +160,13 @@ export function LibraryPage({
 
   const play = async (item: CatalogTitle) => {
     if (pendingLibraryAction) return;
-    const streamWindow = window.open("about:blank", "_blank");
     setPendingLibraryAction({ titleId: item.id, kind: "play" });
     setLibraryError("");
     setLibraryNotice("");
-    setPlaybackReady(null);
     try {
       const response = await api.preparePlayback(profileId, item.id);
-      if (streamWindow) streamWindow.location.replace(response.playback.url);
-      else setPlaybackReady({ title: item.title, grant: response.playback });
+      onPlaybackReady(item, response.playback);
     } catch (error) {
-      streamWindow?.close();
       playbackChecks.markFailed(item.id, safeErrorMessage(error));
     } finally {
       setPendingLibraryAction(null);
@@ -411,11 +386,6 @@ export function LibraryPage({
       {libraryNotice && (
         <p className="page-message" role="status">
           {libraryNotice}
-          {playbackReady && (
-            <small>
-              Ready until {formatExpiry(playbackReady.grant.expiresAt)}.
-            </small>
-          )}
         </p>
       )}
 
@@ -451,11 +421,6 @@ export function LibraryPage({
                   : undefined
               }
               playbackEnabled={playbackEnabled}
-              playbackUrl={
-                playbackReady?.grant.titleId === entry.title.id
-                  ? playbackReady.grant.url
-                  : undefined
-              }
             />
           ))}
         </div>
@@ -624,11 +589,4 @@ export function LibraryPage({
       )}
     </main>
   );
-}
-
-function formatExpiry(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? "soon"
-    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }

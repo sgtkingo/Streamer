@@ -19,20 +19,21 @@ deployment and agent decisions live in [`instructions/`](instructions/).
   provider ID mappings, durable discovery sessions/idempotency, Library and
   editable History.
 - TMDB connection verification designed around an in-app guided setup flow.
-- Provider-neutral contracts and registries, plus prepared TMDB metadata,
-  guided Webshare authentication/media/playback-ticket and Ollama
-  structured-agent adapters.
+- Provider-neutral contracts and registries, TMDB metadata, guided Webshare
+  authentication, an FFmpeg-backed in-app player and Ollama structured-agent
+  adapters.
 
-The current development feed is explicitly labeled as preview data and cannot
-create playback history. It does not claim production Webshare playback, live
-provider ratings, Cloudflare sync or a finished autonomous discovery pipeline.
-Those features still have mandatory real-provider and safety gates in
+The development feed is explicitly labeled as preview data and cannot create
+playback history. Live Webshare playback now has an integrated player, but its
+real-account codec, seeking and subtitle checks remain release gates. Cloudflare
+sync and the complete autonomous discovery pipeline remain future work in
 [`instructions/DEPLOY.md`](instructions/DEPLOY.md).
 
 ## Prerequisites
 
 - Node.js 22.12 or newer (Node.js 24 LTS is the deployment target).
 - pnpm 10.
+- FFmpeg and FFprobe for local development (the server Docker image installs both).
 
 Install pnpm if it is not already available:
 

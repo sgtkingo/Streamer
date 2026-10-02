@@ -229,6 +229,39 @@ export const PlaybackGrantSchema = z
   .strict();
 export type PlaybackGrant = z.infer<typeof PlaybackGrantSchema>;
 
+export const PlaybackAudioTrackSchema = z
+  .object({
+    streamIndex: z.number().int().nonnegative(),
+    codec: z.string().trim().min(1).max(80),
+    channels: z.number().int().min(1).max(8),
+    channelLayout: z.string().trim().max(80).nullable(),
+    language: z.string().trim().max(16).nullable(),
+    title: z.string().trim().max(80).nullable(),
+  })
+  .strict();
+export type PlaybackAudioTrack = z.infer<typeof PlaybackAudioTrackSchema>;
+
+export const PlaybackSubtitleTrackSchema = z
+  .object({
+    streamIndex: z.number().int().nonnegative(),
+    codec: z.string().trim().min(1).max(80),
+    language: z.string().trim().max(16).nullable(),
+    title: z.string().trim().max(80).nullable(),
+  })
+  .strict();
+export type PlaybackSubtitleTrack = z.infer<typeof PlaybackSubtitleTrackSchema>;
+
+export const PlaybackMediaInfoSchema = z
+  .object({
+    durationSeconds: z.number().positive().max(86_400).nullable(),
+    videoCodec: z.string().trim().min(1).max(80),
+    videoPixelFormat: z.string().trim().max(80).nullable(),
+    audioTracks: z.array(PlaybackAudioTrackSchema).max(20),
+    subtitleTracks: z.array(PlaybackSubtitleTrackSchema).max(20),
+  })
+  .strict();
+export type PlaybackMediaInfo = z.infer<typeof PlaybackMediaInfoSchema>;
+
 export const SubtitleSearchRequestSchema = z
   .object({
     titleId: z.string().trim().min(1).max(160),

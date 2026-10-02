@@ -4,7 +4,7 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 WORKDIR /app
 
-RUN corepack enable
+RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json

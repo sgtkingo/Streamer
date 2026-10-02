@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { StreamerApi } from "./api/client";
@@ -89,6 +90,15 @@ function createApi(): StreamerApi {
       },
     }),
     checkPlayback: vi.fn().mockResolvedValue({ ok: true }),
+    getPlaybackManifest: vi.fn().mockResolvedValue({
+      durationSeconds: 120,
+      videoCodec: "h264",
+      videoPixelFormat: "yuv420p",
+      audioTracks: [],
+      subtitleTracks: [],
+    }),
+    closePlayback: vi.fn().mockResolvedValue(undefined),
+    savePlaybackProgress: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -307,7 +317,7 @@ describe("conversational Home", () => {
     });
     expect(
       within(results).getByRole("button", {
-        name: /streaming source required/i,
+        name: /play/i,
       }),
     ).toBeInTheDocument();
     await user.click(
@@ -338,7 +348,11 @@ describe("conversational Home", () => {
       warnings: [],
       completedAt: "2026-09-27T12:00:00.000Z",
     });
-    render(<App api={api} />);
+    render(
+      <StrictMode>
+        <App api={api} />
+      </StrictMode>,
+    );
 
     await user.type(
       await screen.findByLabelText(/ask streamerai/i),
@@ -352,6 +366,18 @@ describe("conversational Home", () => {
     expect(checking).toBeDisabled();
     expect(checking).toHaveClass("button--checking");
     resolveCheck();
-    expect(await screen.findByRole("button", { name: /play/i })).toBeEnabled();
+    const play = await screen.findByRole("button", { name: /play/i });
+    expect(play).toBeEnabled();
+    await user.click(play);
+    expect(
+      await screen.findByRole("dialog", { name: /playing the lake house/i }),
+    ).toBeInTheDocument();
+    expect(api.getPlaybackManifest).toHaveBeenCalledWith("grant-1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.closePlayback).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /close player/i }));
+    await waitFor(() =>
+      expect(api.closePlayback).toHaveBeenCalledWith("grant-1"),
+    );
   });
 });

@@ -62,7 +62,14 @@ export class InMemoryPlaybackTicketStore implements PlaybackTicketStore {
   markStarted(grantId: string): boolean {
     const active = this.get(grantId);
     if (active === null || active.started) return false;
-    this.#active = { ...active, started: true };
+    // The initial grant is short lived; a started playback must survive a film.
+    this.#active = {
+      ...active,
+      started: true,
+      expiresAt: new Date(
+        this.now().getTime() + 8 * 60 * 60 * 1000,
+      ).toISOString(),
+    };
     return true;
   }
 
