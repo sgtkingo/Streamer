@@ -10,11 +10,15 @@ import {
   type MediaCandidate,
   type MediaCandidateRef,
   type MediaFormat,
+  type PlaybackLanguageAvailability,
   type MediaProvider,
   type MetadataCandidate,
   type MetadataProvider,
   type ProviderContext,
   type RankedTitle,
+  type SeriesDetail,
+  type SeriesStructure,
+  type EpisodeSelection,
 } from "@streamer-ai/contracts";
 import { createHash } from "node:crypto";
 import type { RuntimeConfig } from "../runtime-config.js";
@@ -76,6 +80,20 @@ interface AgentPlan {
 interface ValidatedCandidate {
   ranked: RankedTitle;
   playbackCandidates: MediaCandidateRef[];
+  seriesStructure?: SeriesStructure;
+  episodeCandidates?: Map<string, MediaCandidateRef[]>;
+}
+
+interface SeriesSearchJob {
+  structure?: SeriesStructure;
+  candidates: Map<string, MediaCandidateRef[]>;
+  running: boolean;
+  failed: boolean;
+  finished: boolean;
+}
+
+function episodeKey(titleId: string, episode: EpisodeSelection): string {
+  return `${titleId}:${episode.seasonNumber}:${episode.episodeNumber}`;
 }
 
 export interface LiveContentCoordinatorOptions {
@@ -307,6 +325,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
   readonly #localeForProfile: LiveContentCoordinatorOptions["localeForProfile"];
   readonly #now: () => Date;
   readonly #playbackCandidates = new Map<string, MediaCandidateRef[]>();
+  readonly #seriesJobs = new Map<string, SeriesSearchJob>();
 
   constructor(options: LiveContentCoordinatorOptions) {
     this.#agent = options.agent;
@@ -488,6 +507,16 @@ export class LiveContentCoordinator implements StreamerContentProvider {
           item.playbackCandidates,
         );
       }
+      if (item.ranked.title.kind === "series") {
+        this.#seriesJobs.set(item.ranked.title.id, {
+          structure: item.seriesStructure,
+          candidates: item.episodeCandidates ?? new Map(),
+          running: false,
+          failed: false,
+          finished: false,
+        });
+        void this.getSeriesDetail(request.profileId, item.ranked.title);
+      }
     }
 
     return DiscoveryResponseSchema.parse({
@@ -508,10 +537,15 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     });
   }
 
-  async checkPlayback(profileId: string, title: CatalogTitle): Promise<void> {
+  async checkPlayback(
+    profileId: string,
+    title: CatalogTitle,
+    episode?: EpisodeSelection,
+  ): Promise<PlaybackLanguageAvailability | void> {
     const { candidates, context } = await this.playbackCandidates(
       profileId,
       title,
+      episode,
     );
     if (this.#media.checkPlayback === undefined) {
       throw new Error("The media source does not support playback checks.");
@@ -521,8 +555,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     );
     for (const candidate of candidates) {
       try {
-        await this.#media.checkPlayback(candidate, context);
-        return;
+        return await this.#media.checkPlayback(candidate, context);
       } catch (error) {
         lastError = error;
       }
@@ -530,10 +563,15 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     throw lastError;
   }
 
-  async preparePlayback(profileId: string, title: CatalogTitle) {
+  async preparePlayback(
+    profileId: string,
+    title: CatalogTitle,
+    episode?: EpisodeSelection,
+  ) {
     const { candidates, context } = await this.playbackCandidates(
       profileId,
       title,
+      episode,
     );
     if (candidates.length === 0)
       throw new Error("No playback candidate remains available.");
@@ -547,6 +585,8 @@ export class LiveContentCoordinator implements StreamerContentProvider {
           {
             profileId,
             titleId: title.id,
+            seasonNumber: episode?.seasonNumber ?? null,
+            episodeNumber: episode?.episodeNumber ?? null,
             variant: { ...candidate, variantId: variant.variantId },
             startPositionSeconds: 0,
           },
@@ -559,7 +599,159 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     throw lastError;
   }
 
-  private async playbackCandidates(profileId: string, title: CatalogTitle) {
+  async getSeriesDetail(
+    profileId: string,
+    title: CatalogTitle,
+    retry = false,
+  ): Promise<SeriesDetail> {
+    let job = this.#seriesJobs.get(title.id);
+    if (!job) {
+      job = {
+        candidates: new Map(),
+        running: false,
+        failed: false,
+        finished: false,
+      };
+      this.#seriesJobs.set(title.id, job);
+    }
+    if (retry && job.failed) job.failed = false;
+    if (!job.running && !job.finished && !job.failed) {
+      job.running = true;
+      void this.searchSeriesEpisodes(profileId, title, job).catch(() => {
+        job.failed = true;
+        job.running = false;
+      });
+    }
+    const seasons =
+      job.structure?.seasons.map((season) => ({
+        seasonNumber: season.seasonNumber,
+        title: season.title,
+        episodes: season.episodes.map((episode) => ({
+          seasonNumber: season.seasonNumber,
+          episodeNumber: episode.episodeNumber,
+          title: episode.title,
+          airDate: episode.airDate,
+          availability: job.candidates.has(
+            episodeKey(title.id, {
+              seasonNumber: season.seasonNumber,
+              episodeNumber: episode.episodeNumber,
+            }),
+          )
+            ? ("available" as const)
+            : job.running
+              ? ("searching" as const)
+              : ("unavailable" as const),
+        })),
+      })) ?? [];
+    const available = seasons
+      .flatMap((season) => season.episodes)
+      .filter((episode) => episode.availability === "available").length;
+    return {
+      status: job.failed
+        ? "failed"
+        : job.running
+          ? "searching"
+          : available === 0
+            ? "unavailable"
+            : job.structure?.complete &&
+                seasons.every((season) =>
+                  season.episodes.every(
+                    (episode) => episode.availability === "available",
+                  ),
+                )
+              ? "complete"
+              : "partial",
+      seasons,
+    };
+  }
+
+  private async searchSeriesEpisodes(
+    profileId: string,
+    title: CatalogTitle,
+    job: SeriesSearchJob,
+  ): Promise<void> {
+    const { context } = await this.playbackCandidates(profileId, title);
+    let hadErrors = false;
+    if (!job.structure) {
+      const externalId = /^sai:tmdb:series:(\d+)$/.exec(title.id)?.[1];
+      if (!externalId)
+        throw new Error("Series metadata reference is unavailable.");
+      job.structure = await this.#metadata.getSeriesStructure(
+        { providerId: "tmdb", entityType: "series", externalId },
+        context,
+      );
+    }
+    for (const season of job.structure.seasons) {
+      for (const episode of season.episodes) {
+        const selection = {
+          seasonNumber: season.seasonNumber,
+          episodeNumber: episode.episodeNumber,
+        };
+        const key = episodeKey(title.id, selection);
+        if (
+          job.candidates.has(key) ||
+          (episode.airDate &&
+            episode.airDate > this.#now().toISOString().slice(0, 10))
+        )
+          continue;
+        try {
+          const episodeContext = {
+            ...context,
+            requestId: `${context.requestId}-${selection.seasonNumber}-${selection.episodeNumber}`,
+            deadlineAt: new Date(this.#now().getTime() + 55_000).toISOString(),
+          };
+          const results = await this.#media.search(
+            {
+              titleId: title.id,
+              kind: "series",
+              title: title.title,
+              originalTitle: title.originalTitle,
+              year: title.year,
+              seasonNumber: selection.seasonNumber,
+              episodeNumber: selection.episodeNumber,
+              externalRefs: [],
+              limit: 20,
+            },
+            episodeContext,
+          );
+          for (const candidate of results) {
+            const parsed = episodeNumber(candidate.releaseName);
+            if (
+              !parsed ||
+              parsed.season !== selection.seasonNumber ||
+              parsed.episode !== selection.episodeNumber ||
+              !titleMatchesRelease(
+                candidate,
+                title.title,
+                title.originalTitle,
+                null,
+              )
+            )
+              continue;
+            try {
+              await this.#media.inspect(candidate.ref, episodeContext);
+              job.candidates.set(key, [candidate.ref]);
+              break;
+            } catch {
+              // Restricted or non-video files are never displayed as playable.
+            }
+          }
+        } catch {
+          // A single failed lookup must not block the remaining seasons.
+          hadErrors = true;
+        }
+      }
+    }
+    job.running = false;
+    job.finished = !hadErrors;
+    job.failed = hadErrors;
+  }
+
+  private async playbackCandidates(
+    profileId: string,
+    title: CatalogTitle,
+    episode?: EpisodeSelection,
+  ) {
     const locale = this.#localeForProfile(profileId);
     const request: DiscoveryRequest = {
       profileId,
@@ -567,7 +759,11 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       idempotencyKey: `playback-${createHash("sha256").update(`${profileId}:${title.id}:${this.#now().toISOString()}`).digest("hex").slice(0, 24)}`,
     };
     const context = providerContext(request, locale, this.#now());
-    let candidates = this.#playbackCandidates.get(title.id) ?? [];
+    let candidates = episode
+      ? (this.#seriesJobs
+          .get(title.id)
+          ?.candidates.get(episodeKey(title.id, episode)) ?? [])
+      : (this.#playbackCandidates.get(title.id) ?? []);
     if (candidates.length === 0) {
       const results = await this.#media.search(
         {
@@ -576,24 +772,37 @@ export class LiveContentCoordinator implements StreamerContentProvider {
           title: title.title,
           originalTitle: title.originalTitle,
           year: title.year,
-          seasonNumber: null,
-          episodeNumber: null,
+          seasonNumber: episode?.seasonNumber ?? null,
+          episodeNumber: episode?.episodeNumber ?? null,
           externalRefs: [],
           limit: 20,
         },
         context,
       );
       candidates = results
-        .filter((item) =>
-          titleMatchesRelease(
-            item,
-            title.title,
-            title.originalTitle,
-            title.year,
-          ),
+        .filter(
+          (item) =>
+            titleMatchesRelease(
+              item,
+              title.title,
+              title.originalTitle,
+              title.kind === "series" ? null : title.year,
+            ) &&
+            (episode === undefined ||
+              (() => {
+                const parsed = episodeNumber(item.releaseName);
+                return (
+                  parsed?.season === episode.seasonNumber &&
+                  parsed.episode === episode.episodeNumber
+                );
+              })()),
         )
         .slice(0, 12)
         .map((item) => item.ref);
+      if (episode && candidates.length > 0) {
+        const job = this.#seriesJobs.get(title.id);
+        job?.candidates.set(episodeKey(title.id, episode), candidates);
+      }
     }
     return { candidates, context };
   }
@@ -654,6 +863,8 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     };
     let seriesCoverage: CatalogTitle["seriesCoverage"] = null;
     let playbackCandidates: MediaCandidateRef[] = [];
+    let seriesStructure: SeriesStructure | undefined;
+    const episodeCandidates = new Map<string, MediaCandidateRef[]>();
     try {
       const mediaCandidates = await this.#media.search(
         {
@@ -674,7 +885,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
           candidate,
           metadata.title,
           metadata.originalTitle,
-          metadata.year,
+          metadata.kind === "series" ? null : metadata.year,
         ),
       );
       const inspected = [];
@@ -706,6 +917,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
             metadata.ref,
             context,
           );
+          seriesStructure = structure;
           const expectedEpisodes = structure.seasons.reduce(
             (count, season) => count + season.episodes.length,
             0,
@@ -713,8 +925,17 @@ export class LiveContentCoordinator implements StreamerContentProvider {
           const found = new Map<string, { season: number; episode: number }>();
           for (const item of inspected) {
             const episode = episodeNumber(item.candidate.releaseName);
-            if (episode !== null)
+            if (episode !== null) {
               found.set(`${episode.season}:${episode.episode}`, episode);
+              const key = episodeKey(titleId, {
+                seasonNumber: episode.season,
+                episodeNumber: episode.episode,
+              });
+              episodeCandidates.set(key, [
+                ...(episodeCandidates.get(key) ?? []),
+                item.candidate.ref,
+              ]);
+            }
           }
           const seasonsAvailable = new Set(
             [...found.values()].map((episode) => episode.season),
@@ -778,6 +999,8 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     return {
       ranked: { title, reason: agent.reason },
       playbackCandidates,
+      seriesStructure,
+      episodeCandidates,
     };
   }
 }

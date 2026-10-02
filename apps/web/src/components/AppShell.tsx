@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CatalogTitle,
+  EpisodeSelection,
   PlaybackGrant,
   ViewerProfile,
 } from "@streamer-ai/contracts";
@@ -10,6 +11,7 @@ import { HomePage } from "./HomePage";
 import { LibraryPage } from "./LibraryPage";
 import { ProfilePages, type ProfilePage } from "./ProfilePages";
 import { VideoPlayer } from "./VideoPlayer";
+import { TitleDetail } from "./TitleDetail";
 
 type Route = "home" | "library" | ProfilePage;
 
@@ -31,6 +33,7 @@ export function AppShell({
   profile,
   onProfileUpdated,
   onSwitchAccount,
+  onDeleteProfile,
   onRerunOnboarding,
   playbackEnabled = false,
 }: {
@@ -38,6 +41,7 @@ export function AppShell({
   profile: ViewerProfile;
   onProfileUpdated: (profile: ViewerProfile) => void;
   onSwitchAccount: () => void;
+  onDeleteProfile: () => Promise<void>;
   onRerunOnboarding: () => void;
   playbackEnabled?: boolean;
 }) {
@@ -46,10 +50,33 @@ export function AppShell({
   const [activePlayback, setActivePlayback] = useState<{
     title: CatalogTitle;
     grant: PlaybackGrant;
+    episode?: EpisodeSelection;
+    episodeTitle?: string;
   } | null>(null);
+  const [detailTitle, setDetailTitle] = useState<CatalogTitle | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profileId = profile.id;
+  const closeDetail = useCallback(() => {
+    setDetailTitle(null);
+    setLibraryVersion((value) => value + 1);
+  }, []);
+  const playFromDetail = useCallback(
+    async (
+      title: CatalogTitle,
+      episode?: EpisodeSelection,
+      episodeTitle?: string,
+    ) => {
+      const response = await api.preparePlayback(profileId, title.id, episode);
+      setActivePlayback({
+        title,
+        grant: response.playback,
+        episode,
+        episodeTitle,
+      });
+    },
+    [api, profileId],
+  );
 
   useEffect(() => {
     const update = () => setRoute(routeFromLocation());
@@ -180,21 +207,25 @@ export function AppShell({
         <HomePage
           api={api}
           profileId={profileId}
+          playbackPreferences={profile.playback}
           version={libraryVersion}
           onLibraryChanged={() => setLibraryVersion((value) => value + 1)}
-          onPlaybackReady={(title, grant) =>
-            setActivePlayback({ title, grant })
+          onOpenTitle={setDetailTitle}
+          onPlaybackReady={(title, grant, episode) =>
+            setActivePlayback({ title, grant, episode })
           }
         />
       ) : route === "library" ? (
         <LibraryPage
           api={api}
           profileId={profileId}
+          playbackPreferences={profile.playback}
           version={libraryVersion}
           onBackHome={() => navigate("home")}
+          onOpenTitle={setDetailTitle}
           playbackEnabled={playbackEnabled}
-          onPlaybackReady={(title, grant) =>
-            setActivePlayback({ title, grant })
+          onPlaybackReady={(title, grant, episode) =>
+            setActivePlayback({ title, grant, episode })
           }
         />
       ) : (
@@ -206,15 +237,37 @@ export function AppShell({
           onProfileUpdated={onProfileUpdated}
           onRerunOnboarding={onRerunOnboarding}
           onSwitchAccount={onSwitchAccount}
+          onDeleteProfile={onDeleteProfile}
           onBackHome={() => navigate("home")}
+        />
+      )}
+      {detailTitle && (
+        <TitleDetail
+          key={detailTitle.id}
+          api={api}
+          profileId={profileId}
+          title={detailTitle}
+          playbackEnabled={playbackEnabled}
+          suspended={activePlayback !== null}
+          onClose={closeDetail}
+          onOpenRelated={setDetailTitle}
+          onPlay={playFromDetail}
+          onAdded={() => setLibraryVersion((value) => value + 1)}
         />
       )}
       {activePlayback && (
         <VideoPlayer
+          key={activePlayback.grant.grantId}
           api={api}
+          profileId={profileId}
           title={activePlayback.title}
           grant={activePlayback.grant}
+          episode={activePlayback.episode}
+          episodeTitle={activePlayback.episodeTitle}
           preferences={profile.playback}
+          onPlayEpisode={(episode, episodeTitle) =>
+            playFromDetail(activePlayback.title, episode, episodeTitle)
+          }
           onClose={() => {
             setActivePlayback(null);
             setLibraryVersion((value) => value + 1);

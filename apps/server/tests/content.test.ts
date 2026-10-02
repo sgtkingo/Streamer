@@ -126,6 +126,44 @@ describe("provider-neutral content API", () => {
     expect(history.json().items).toHaveLength(0);
   });
 
+  it("opens one detail contract for movies and series without inventing preview episodes", async () => {
+    const instance = app();
+    const movie = await instance.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default/titles/sai%3Apreview%3Alake-house",
+    });
+    const series = await instance.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default/titles/sai%3Apreview%3Aonly-murders",
+    });
+    expect(movie.statusCode).toBe(200);
+    expect(movie.json()).toMatchObject({
+      title: { kind: "movie" },
+      series: null,
+    });
+    expect(Array.isArray(movie.json().related)).toBe(true);
+    expect(series.statusCode).toBe(200);
+    expect(series.json()).toMatchObject({
+      title: { kind: "series" },
+      series: null,
+    });
+    const retry = await instance.inject({
+      method: "GET",
+      url: "/api/v1/profiles/default/titles/sai%3Apreview%3Aonly-murders?retry=true",
+    });
+    expect(retry.statusCode).toBe(200);
+  });
+
+  it("rejects an incomplete episode selection before playback", async () => {
+    const instance = app();
+    const result = await instance.inject({
+      method: "POST",
+      url: "/api/v1/profiles/default/playback/prepare",
+      payload: { titleId: "sai:preview:only-murders", seasonNumber: 1 },
+    });
+    expect(result.statusCode).toBe(400);
+  });
+
   it("never offers playback for a preview-only title", async () => {
     const result = await app().inject({
       method: "POST",

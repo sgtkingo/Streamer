@@ -240,8 +240,32 @@ describe("provider HTTP clients", () => {
       baseUrl: "https://webshare.test/api",
     });
     let capturedDirectUrl = "";
+    let probedDirectUrl = "";
+    let probeCount = 0;
     const provider = new WebshareMediaProvider({
       client,
+      probeMedia: async (directUrl) => {
+        probedDirectUrl = directUrl;
+        probeCount += 1;
+        return {
+          durationSeconds: 120,
+          videoCodec: "h264",
+          videoPixelFormat: "yuv420p",
+          audioTracks: [
+            {
+              streamIndex: 1,
+              codec: "aac",
+              channels: 2,
+              channelLayout: "stereo",
+              language: "jpn",
+              title: null,
+            },
+          ],
+          subtitleTracks: [
+            { streamIndex: 2, codec: "subrip", language: "cs", title: null },
+          ],
+        };
+      },
       issuePlaybackTicket: (input) => {
         capturedDirectUrl = input.directUrl;
         return `/api/v1/playback/grants/${input.grantId}`;
@@ -273,6 +297,30 @@ describe("provider HTTP clients", () => {
     );
     expect(grant.url).toMatch(/^\/api\/v1\/playback\/grants\//);
     expect(grant.url).not.toContain("secret-direct-link");
+    expect(
+      await provider.checkPlayback(
+        { providerId: "webshare", candidateId: "file-1" },
+        {
+          requestId: "request-0002",
+          profileId: "default",
+          locale: "cs",
+          deadlineAt: "2099-01-01T00:00:00.000Z",
+          secretRef: null,
+        },
+      ),
+    ).toEqual({ audioLanguages: ["jpn"], subtitleLanguages: ["cs"] });
+    expect(probedDirectUrl).toBe("https://cdn.webshare.cz/secret-direct-link");
+    await provider.checkPlayback(
+      { providerId: "webshare", candidateId: "file-1" },
+      {
+        requestId: "request-0003",
+        profileId: "default",
+        locale: "cs",
+        deadlineAt: "2099-01-01T00:00:00.000Z",
+        secretRef: null,
+      },
+    );
+    expect(probeCount).toBe(1);
   });
 
   it("rejects TMDB calls when the integration is not configured", async () => {

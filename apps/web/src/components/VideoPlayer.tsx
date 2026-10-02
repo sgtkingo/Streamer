@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CatalogTitle,
   PlaybackGrant,
   PlaybackMediaInfo,
   PlaybackPreferences,
+  EpisodeSelection,
+  SeriesEpisodeDetail,
 } from "@streamer-ai/contracts";
 import type { StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
@@ -22,9 +24,16 @@ interface LocalSubtitle {
 
 interface VideoPlayerProps {
   api: StreamerApi;
+  profileId: string;
   title: CatalogTitle;
   grant: PlaybackGrant;
+  episode?: EpisodeSelection;
+  episodeTitle?: string;
   preferences: PlaybackPreferences;
+  onPlayEpisode: (
+    episode: EpisodeSelection,
+    episodeTitle: string,
+  ) => Promise<void>;
   onClose: () => void;
 }
 
@@ -51,9 +60,13 @@ function channelLabel(channels: number, layout: string | null): string {
 
 export function VideoPlayer({
   api,
+  profileId,
   title,
   grant,
+  episode,
+  episodeTitle,
   preferences,
+  onPlayEpisode,
   onClose,
 }: VideoPlayerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -63,6 +76,8 @@ export function VideoPlayer({
   const resumeAfterLoadRef = useRef(true);
   const lastThumbnailAtRef = useRef(0);
   const progressRef = useRef(0);
+  const positionSecondsRef = useRef(0);
+  const durationSecondsRef = useRef(0);
   const lastProgressAtRef = useRef(0);
   const startedRef = useRef(false);
   const closingRef = useRef(false);
@@ -89,6 +104,91 @@ export function VideoPlayer({
   const [needsClick, setNeedsClick] = useState(false);
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
+  const [resumePrompt, setResumePrompt] = useState(false);
+  const [resumeCountdown, setResumeCountdown] = useState(5);
+  const [resumeChosen, setResumeChosen] = useState(false);
+  const [loadedEpisodeTitle, setLoadedEpisodeTitle] = useState<string | null>(
+    null,
+  );
+  const [availableEpisodes, setAvailableEpisodes] = useState<
+    SeriesEpisodeDetail[]
+  >([]);
+  const [nextEpisodeCountdown, setNextEpisodeCountdown] = useState<
+    number | null
+  >(null);
+  const [episodeSwitching, setEpisodeSwitching] = useState(false);
+  const [episodeError, setEpisodeError] = useState("");
+
+  useEffect(() => {
+    if (title.kind !== "series") return;
+    let active = true;
+    void api
+      .getTitleDetail(profileId, title.id)
+      .then((detail) => {
+        if (!active) return;
+        const episodes =
+          detail.series?.seasons
+            .flatMap((season) => season.episodes)
+            .filter((item) => item.availability === "available")
+            .sort(
+              (left, right) =>
+                left.seasonNumber - right.seasonNumber ||
+                left.episodeNumber - right.episodeNumber,
+            ) ?? [];
+        setAvailableEpisodes(episodes);
+        if (!episode || episodeTitle) return;
+        const name = episodes.find(
+          (item) =>
+            item.seasonNumber === episode.seasonNumber &&
+            item.episodeNumber === episode.episodeNumber,
+        )?.title;
+        if (name) setLoadedEpisodeTitle(name);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [api, profileId, title.id, title.kind, episode, episodeTitle]);
+
+  const currentEpisodeIndex = episode
+    ? availableEpisodes.findIndex(
+        (item) =>
+          item.seasonNumber === episode.seasonNumber &&
+          item.episodeNumber === episode.episodeNumber,
+      )
+    : -1;
+  const previousEpisode =
+    currentEpisodeIndex > 0
+      ? availableEpisodes[currentEpisodeIndex - 1]
+      : undefined;
+  const nextEpisode =
+    currentEpisodeIndex >= 0
+      ? availableEpisodes[currentEpisodeIndex + 1]
+      : undefined;
+
+  const playEpisode = useCallback(
+    async (item: SeriesEpisodeDetail) => {
+      if (episodeSwitching) return;
+      setEpisodeSwitching(true);
+      setEpisodeError("");
+      setNextEpisodeCountdown(null);
+      videoRef.current?.pause();
+      try {
+        await onPlayEpisode(
+          {
+            seasonNumber: item.seasonNumber,
+            episodeNumber: item.episodeNumber,
+          },
+          item.title,
+        );
+      } catch (error) {
+        setEpisodeSwitching(false);
+        setEpisodeError(safeErrorMessage(error));
+        void videoRef.current?.play().catch(() => setNeedsClick(true));
+      }
+    },
+    [episodeSwitching, onPlayEpisode],
+  );
 
   useEffect(() => {
     if (cleanupTimerRef.current !== null) {
@@ -100,13 +200,22 @@ export function VideoPlayer({
       .getPlaybackManifest(grant.grantId)
       .then((manifest) => {
         if (!active) return;
-        const savedPercent = title.progressPercent ?? 0;
-        const resumeAt =
-          manifest.durationSeconds !== null &&
-          savedPercent >= 2 &&
-          savedPercent < 95
-            ? (manifest.durationSeconds * savedPercent) / 100
-            : 0;
+        const sameResumeEpisode =
+          title.kind !== "series" ||
+          (episode !== undefined &&
+            title.resumeEpisode?.seasonNumber === episode.seasonNumber &&
+            title.resumeEpisode?.episodeNumber === episode.episodeNumber);
+        const savedPercent = sameResumeEpisode
+          ? (title.progressPercent ?? 0)
+          : 0;
+        const resumeAt = sameResumeEpisode
+          ? (title.resumePositionSeconds ??
+            (title.kind === "movie" && manifest.durationSeconds !== null
+              ? (manifest.durationSeconds * savedPercent) / 100
+              : 0))
+          : 0;
+        const canResume =
+          savedPercent >= 2 && savedPercent < 95 && resumeAt > 0;
         const audio = preferredAudioTrack(manifest, preferences);
         setInfo(manifest);
         setSelectedAudio(audio?.streamIndex ?? null);
@@ -115,7 +224,11 @@ export function VideoPlayer({
         );
         setSourceStart(resumeAt);
         setPosition(resumeAt);
+        positionSecondsRef.current = resumeAt;
+        durationSecondsRef.current = manifest.durationSeconds ?? 0;
         progressRef.current = resumeAt > 0 ? savedPercent : 0;
+        setResumePrompt(canResume);
+        setResumeChosen(!canResume);
       })
       .catch((error: unknown) => {
         if (active) setLoadingError(safeErrorMessage(error));
@@ -127,7 +240,12 @@ export function VideoPlayer({
         cleanupTimerRef.current = null;
         if (closingRef.current) return;
         const save = startedRef.current
-          ? api.savePlaybackProgress(grant.grantId, progressRef.current)
+          ? api.savePlaybackProgress(
+              grant.grantId,
+              progressRef.current,
+              positionSecondsRef.current,
+              durationSecondsRef.current,
+            )
           : Promise.resolve();
         void save
           .catch(() => undefined)
@@ -136,7 +254,53 @@ export function VideoPlayer({
           );
       }, 0);
     };
-  }, [api, grant.grantId, preferences, title.progressPercent]);
+  }, [
+    api,
+    grant.grantId,
+    preferences,
+    title.progressPercent,
+    title.resumePositionSeconds,
+    title.kind,
+    title.resumeEpisode,
+    episode,
+  ]);
+
+  useEffect(() => {
+    if (!resumePrompt || resumeChosen || resumeCountdown <= 0) return;
+    const timer = window.setTimeout(
+      () => setResumeCountdown((seconds) => seconds - 1),
+      1000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [resumePrompt, resumeChosen, resumeCountdown]);
+
+  useEffect(() => {
+    if (!resumePrompt || resumeCountdown > 0) return;
+    setResumePrompt(false);
+    setResumeChosen(true);
+    const video = videoRef.current;
+    if (video)
+      void video
+        .play()
+        .then(() => setNeedsClick(false))
+        .catch(() => setNeedsClick(true));
+  }, [resumePrompt, resumeCountdown]);
+
+  useEffect(() => {
+    if (nextEpisodeCountdown === null || !nextEpisode) return;
+    if (nextEpisodeCountdown === 0) {
+      void playEpisode(nextEpisode);
+      return;
+    }
+    const timer = window.setTimeout(
+      () =>
+        setNextEpisodeCountdown((current) =>
+          current === null ? null : current - 1,
+        ),
+      1000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [nextEpisodeCountdown, nextEpisode, playEpisode]);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -192,12 +356,42 @@ export function VideoPlayer({
     if (closingRef.current) return;
     closingRef.current = true;
     const save = startedRef.current
-      ? api.savePlaybackProgress(grant.grantId, progressRef.current)
+      ? api.savePlaybackProgress(
+          grant.grantId,
+          progressRef.current,
+          positionSecondsRef.current,
+          durationSecondsRef.current,
+        )
       : Promise.resolve();
     void save
       .catch(() => undefined)
       .then(() => api.closePlayback(grant.grantId).catch(() => undefined))
       .finally(onClose);
+  };
+
+  const chooseResume = (continueWatching: boolean) => {
+    setResumePrompt(false);
+    setResumeChosen(true);
+    setResumeCountdown(5);
+    if (!continueWatching) {
+      progressRef.current = 0;
+      positionSecondsRef.current = 0;
+      setPosition(0);
+      setSourceStart(0);
+      setSourceVersion((value) => value + 1);
+      void api
+        .savePlaybackProgress(grant.grantId, 0, 0, durationSecondsRef.current)
+        .catch(() => undefined);
+    }
+    const video = videoRef.current;
+    if (continueWatching && video) {
+      void video
+        .play()
+        .then(() => setNeedsClick(false))
+        .catch(() => setNeedsClick(true));
+    } else {
+      resumeAfterLoadRef.current = true;
+    }
   };
 
   useEffect(() => {
@@ -262,6 +456,7 @@ export function VideoPlayer({
   const restartAt = (seconds: number, audio = selectedAudio) => {
     const at = Math.min(Math.max(0, seconds), Math.max(0, duration - 0.2));
     if (duration > 0) progressRef.current = (at / duration) * 100;
+    positionSecondsRef.current = at;
     resumeAfterLoadRef.current = videoRef.current
       ? !videoRef.current.paused
       : true;
@@ -348,7 +543,7 @@ export function VideoPlayer({
             playsInline
             preload="auto"
             onCanPlay={() => {
-              if (!resumeAfterLoadRef.current) return;
+              if (!resumeAfterLoadRef.current || resumePrompt) return;
               resumeAfterLoadRef.current = false;
               void videoRef.current
                 ?.play()
@@ -363,13 +558,19 @@ export function VideoPlayer({
               setPlaying(false);
               if (startedRef.current && duration > 0) {
                 void api
-                  .savePlaybackProgress(grant.grantId, progressRef.current)
+                  .savePlaybackProgress(
+                    grant.grantId,
+                    progressRef.current,
+                    positionSecondsRef.current,
+                    durationSecondsRef.current,
+                  )
                   .catch(() => undefined);
               }
             }}
             onTimeUpdate={(event) => {
               const at = sourceStart + event.currentTarget.currentTime;
               setPosition(at);
+              positionSecondsRef.current = at;
               if (duration > 0) {
                 progressRef.current = Math.min(100, (at / duration) * 100);
                 if (
@@ -378,7 +579,12 @@ export function VideoPlayer({
                 ) {
                   lastProgressAtRef.current = Date.now();
                   void api
-                    .savePlaybackProgress(grant.grantId, progressRef.current)
+                    .savePlaybackProgress(
+                      grant.grantId,
+                      progressRef.current,
+                      positionSecondsRef.current,
+                      durationSecondsRef.current,
+                    )
                     .catch(() => undefined);
                 }
               }
@@ -387,8 +593,9 @@ export function VideoPlayer({
               setPlaying(false);
               if (duration > 0) setPosition(duration);
               progressRef.current = 100;
+              setNextEpisodeCountdown(nextEpisode ? 5 : null);
               void api
-                .savePlaybackProgress(grant.grantId, 100)
+                .savePlaybackProgress(grant.grantId, 100, duration, duration)
                 .catch(() => undefined);
             }}
             onLoadedData={() => setPlaybackError("")}
@@ -435,7 +642,19 @@ export function VideoPlayer({
           <div>
             <Brand className="brand--player" />
             <p className="video-player__eyebrow">Now playing</p>
-            <h2>{title.title}</h2>
+            <h2>
+              {title.title}
+              {title.kind === "series" && episode && (
+                <>
+                  {" "}
+                  <span aria-hidden="true">•</span> S
+                  {String(episode.seasonNumber).padStart(2, "0")}E
+                  {String(episode.episodeNumber).padStart(2, "0")}
+                  {(episodeTitle || loadedEpisodeTitle) &&
+                    ` · ${episodeTitle || loadedEpisodeTitle}`}
+                </>
+              )}
+            </h2>
             {title.year && <small>{title.year}</small>}
           </div>
           <button
@@ -470,7 +689,78 @@ export function VideoPlayer({
             </button>
           </div>
         )}
-        {info && !playing && !playbackError && (
+        {resumePrompt && info && (
+          <div className="video-player__resume-backdrop">
+            <section
+              className="video-player__resume-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="resume-title"
+            >
+              <p className="video-player__eyebrow">Playback progress saved</p>
+              <h3 id="resume-title">Continue watching?</h3>
+              <p>
+                Pick up at {formatTime(sourceStart)}, or start from the
+                beginning.
+              </p>
+              <div className="video-player__resume-actions">
+                <button
+                  type="button"
+                  className="button button--primary video-player__continue"
+                  onClick={() => chooseResume(true)}
+                >
+                  <span style={{ animationDuration: "5s" }} />
+                  <span className="video-player__continue-label">
+                    Continue watching <small>{resumeCountdown}</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={() => chooseResume(false)}
+                >
+                  Play from the beginning
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+        {nextEpisodeCountdown !== null && nextEpisode && (
+          <div className="video-player__next-episode-backdrop">
+            <section
+              className="video-player__next-episode"
+              role="group"
+              aria-label="Next episode"
+              aria-live="polite"
+            >
+              <p className="video-player__eyebrow">Up next</p>
+              <h3>
+                S{String(nextEpisode.seasonNumber).padStart(2, "0")}E
+                {String(nextEpisode.episodeNumber).padStart(2, "0")} ·{" "}
+                {nextEpisode.title}
+              </h3>
+              <p>Starting in {nextEpisodeCountdown} seconds</p>
+              <div className="video-player__next-episode-actions">
+                <button
+                  className="button button--primary"
+                  type="button"
+                  disabled={episodeSwitching}
+                  onClick={() => void playEpisode(nextEpisode)}
+                >
+                  Play now
+                </button>
+                <button
+                  className="button button--secondary"
+                  type="button"
+                  onClick={() => setNextEpisodeCountdown(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+        {info && !resumePrompt && !playing && !playbackError && (
           <button
             type="button"
             className="video-player__center-play"
@@ -483,6 +773,11 @@ export function VideoPlayer({
 
         {info && (
           <div className="video-player__controls">
+            {episodeError && (
+              <p className="video-player__subtitle-error" role="alert">
+                Could not start that episode: {episodeError}
+              </p>
+            )}
             {subtitleError && (
               <p className="video-player__subtitle-error" role="alert">
                 {subtitleError}
@@ -545,6 +840,38 @@ export function VideoPlayer({
               </div>
             )}
             <div className="video-player__control-row">
+              {title.kind === "series" && episode && (
+                <>
+                  <button
+                    type="button"
+                    className="video-player__episode-button"
+                    disabled={!previousEpisode || episodeSwitching}
+                    onClick={() =>
+                      previousEpisode && void playEpisode(previousEpisode)
+                    }
+                    aria-label={
+                      previousEpisode
+                        ? `Play previous episode, season ${previousEpisode.seasonNumber}, episode ${previousEpisode.episodeNumber}`
+                        : "No previous episode available"
+                    }
+                  >
+                    ‹ Previous
+                  </button>
+                  <button
+                    type="button"
+                    className="video-player__episode-button"
+                    disabled={!nextEpisode || episodeSwitching}
+                    onClick={() => nextEpisode && void playEpisode(nextEpisode)}
+                    aria-label={
+                      nextEpisode
+                        ? `Play next episode, season ${nextEpisode.seasonNumber}, episode ${nextEpisode.episodeNumber}`
+                        : "No next episode available"
+                    }
+                  >
+                    Next ›
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 className="video-player__icon-button"

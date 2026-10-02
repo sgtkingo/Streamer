@@ -152,6 +152,13 @@ Availability states:
 | `unavailable` | Metadata exists but no admissible provider result was found. | Grayscale tile, no Play. |
 | `unknown` | Provider check failed or is stale beyond policy. | Do not claim unavailable; show Retry. |
 
+After the initial result appears, a series may continue a provider-neutral,
+episode-by-episode deep search in the background. The system may mark an
+episode playable only after matching the exact season/episode identity and
+inspecting an admissible file. Search progress must not prevent playback of
+earlier verified episodes. Playback preparation must never substitute a
+different episode if the selected one becomes unavailable.
+
 Availability is rechecked immediately before playback. An expired cache or
 provider outage can never be converted into a factual `unavailable` state.
 

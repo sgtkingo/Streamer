@@ -51,6 +51,10 @@ export const MediaFormatSchema = z
   })
   .strict();
 export type MediaFormat = z.infer<typeof MediaFormatSchema>;
+export type PlaybackLanguageAvailability = Pick<
+  MediaFormat,
+  "audioLanguages" | "subtitleLanguages"
+>;
 
 export const SeriesCoverageSchema = z
   .object({
@@ -114,6 +118,15 @@ export const CatalogTitleSchema = z
     availabilityProvenance: FieldProvenanceSchema.optional(),
     inLibrary: z.boolean(),
     progressPercent: z.number().min(0).max(100).nullable(),
+    resumePositionSeconds: z.number().nonnegative().nullable().optional(),
+    resumeEpisode: z
+      .object({
+        seasonNumber: z.number().int().positive(),
+        episodeNumber: z.number().int().positive(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict()
   .superRefine((title, context) => {
@@ -219,6 +232,42 @@ export const CatalogTitleSchema = z
     }
   });
 export type CatalogTitle = z.infer<typeof CatalogTitleSchema>;
+
+export const SeriesEpisodeDetailSchema = z.object({
+  seasonNumber: z.number().int().nonnegative(),
+  episodeNumber: z.number().int().positive(),
+  title: z.string().min(1).max(240),
+  airDate: z.string().date().nullable(),
+  availability: z.enum(["available", "searching", "unavailable"]),
+});
+export type SeriesEpisodeDetail = z.infer<typeof SeriesEpisodeDetailSchema>;
+
+export const SeriesDetailSchema = z.object({
+  status: z.enum(["searching", "complete", "partial", "unavailable", "failed"]),
+  seasons: z.array(
+    z.object({
+      seasonNumber: z.number().int().nonnegative(),
+      title: z.string().max(240).nullable(),
+      episodes: z.array(SeriesEpisodeDetailSchema),
+    }),
+  ),
+});
+export type SeriesDetail = z.infer<typeof SeriesDetailSchema>;
+
+export const TitleDetailSchema = z.object({
+  title: CatalogTitleSchema,
+  series: SeriesDetailSchema.nullable(),
+  related: z.array(CatalogTitleSchema).max(12),
+});
+export type TitleDetail = z.infer<typeof TitleDetailSchema>;
+
+export const EpisodeSelectionSchema = z
+  .object({
+    seasonNumber: z.number().int().nonnegative(),
+    episodeNumber: z.number().int().positive(),
+  })
+  .strict();
+export type EpisodeSelection = z.infer<typeof EpisodeSelectionSchema>;
 
 function addMissingLiveProvenanceIssues(
   title: CatalogTitle,

@@ -2,6 +2,7 @@ import {
   CompleteSetupRequestSchema,
   CreateViewerProfileSchema,
   DiscoveryRequestSchema,
+  EpisodeSelectionSchema,
   UpdateViewerProfileSchema,
 } from "@streamer-ai/contracts";
 import { ProfileLimitError } from "@streamer-ai/database";
@@ -177,6 +178,21 @@ export function registerContentRoutes(
     },
   );
 
+  app.delete(
+    "/api/v1/profiles/:profileId",
+    { schema: { params: profileParamsSchema } },
+    async (request, reply) => {
+      try {
+        dependencies.core.deleteViewerProfile(
+          (request.params as { profileId: string }).profileId,
+        );
+        return reply.code(204).send();
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
+  );
+
   app.get(
     "/api/v1/home",
     {
@@ -235,6 +251,35 @@ export function registerContentRoutes(
       try {
         return dependencies.core.library(
           (request.params as { profileId: string }).profileId,
+        );
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/v1/profiles/:profileId/titles/:titleId",
+    {
+      schema: {
+        params: titleParamsSchema,
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { retry: { type: "boolean" } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { profileId, titleId } = request.params as {
+        profileId: string;
+        titleId: string;
+      };
+      try {
+        return await dependencies.core.titleDetail(
+          profileId,
+          titleId,
+          (request.query as { retry?: boolean }).retry === true,
         );
       } catch (error) {
         return sendDomainError(reply, error);
@@ -359,16 +404,37 @@ export function registerContentRoutes(
           additionalProperties: false,
           properties: {
             titleId: { type: "string", minLength: 1, maxLength: 160 },
+            seasonNumber: { type: "integer", minimum: 0 },
+            episodeNumber: { type: "integer", minimum: 1 },
           },
         },
       },
     },
     async (request, reply) => {
       const { profileId } = request.params as { profileId: string };
-      const { titleId } = request.body as { titleId: string };
+      const { titleId, ...selection } = request.body as {
+        titleId: string;
+        seasonNumber?: number;
+        episodeNumber?: number;
+      };
+      const episode =
+        Object.keys(selection).length === 0
+          ? undefined
+          : EpisodeSelectionSchema.safeParse(selection).data;
+      if (Object.keys(selection).length > 0 && !episode)
+        return reply.code(400).send({
+          error: {
+            code: "INVALID_REQUEST",
+            message: "Choose a valid episode.",
+          },
+        });
       try {
-        await dependencies.core.checkPlayback(profileId, titleId);
-        return { ok: true };
+        const languages = await dependencies.core.checkPlayback(
+          profileId,
+          titleId,
+          episode,
+        );
+        return { ok: true, ...(languages ?? {}) };
       } catch (error) {
         return sendDomainError(reply, error);
       }
@@ -386,17 +452,38 @@ export function registerContentRoutes(
           additionalProperties: false,
           properties: {
             titleId: { type: "string", minLength: 1, maxLength: 160 },
+            seasonNumber: { type: "integer", minimum: 0 },
+            episodeNumber: { type: "integer", minimum: 1 },
           },
         },
       },
     },
     async (request, reply) => {
       const { profileId } = request.params as { profileId: string };
-      const { titleId } = request.body as { titleId: string };
+      const { titleId, ...selection } = request.body as {
+        titleId: string;
+        seasonNumber?: number;
+        episodeNumber?: number;
+      };
+      const episode =
+        Object.keys(selection).length === 0
+          ? undefined
+          : EpisodeSelectionSchema.safeParse(selection).data;
+      if (Object.keys(selection).length > 0 && !episode)
+        return reply.code(400).send({
+          error: {
+            code: "INVALID_REQUEST",
+            message: "Choose a valid episode.",
+          },
+        });
       try {
         return {
           ok: true,
-          playback: await dependencies.core.preparePlayback(profileId, titleId),
+          playback: await dependencies.core.preparePlayback(
+            profileId,
+            titleId,
+            episode,
+          ),
         };
       } catch (error) {
         return sendDomainError(reply, error);

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CatalogTitle,
+  EpisodeSelection,
   DiscoveryResponse,
   HomeFeed,
+  PlaybackPreferences,
 } from "@streamer-ai/contracts";
 import type { PlaybackGrant, StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
@@ -12,9 +14,15 @@ import { usePlaybackChecks } from "./usePlaybackChecks";
 interface HomePageProps {
   api: StreamerApi;
   profileId: string;
+  playbackPreferences: PlaybackPreferences;
   version?: number;
   onLibraryChanged: () => void;
-  onPlaybackReady: (item: CatalogTitle, grant: PlaybackGrant) => void;
+  onPlaybackReady: (
+    item: CatalogTitle,
+    grant: PlaybackGrant,
+    episode?: EpisodeSelection,
+  ) => void;
+  onOpenTitle: (item: CatalogTitle) => void;
 }
 
 const stageLabels = [
@@ -41,9 +49,11 @@ interface ConversationTurn {
 export function HomePage({
   api,
   profileId,
+  playbackPreferences,
   version,
   onLibraryChanged,
   onPlaybackReady,
+  onOpenTitle,
 }: HomePageProps) {
   const [feed, setFeed] = useState<HomeFeed | null>(null);
   const [query, setQuery] = useState("");
@@ -149,15 +159,15 @@ export function HomePage({
     }
   };
 
-  const play = async (item: CatalogTitle) => {
+  const play = async (item: CatalogTitle, episode?: EpisodeSelection) => {
     if (pendingAction) return;
     setPendingAction({ titleId: item.id, kind: "play" });
     setError("");
     try {
-      const response = await api.preparePlayback(profileId, item.id);
-      onPlaybackReady(item, response.playback);
+      const response = await api.preparePlayback(profileId, item.id, episode);
+      onPlaybackReady(item, response.playback, episode);
     } catch (actionError) {
-      playbackChecks.markFailed(item.id, safeErrorMessage(actionError));
+      playbackChecks.markFailed(item, safeErrorMessage(actionError), episode);
     } finally {
       setPendingAction(null);
     }
@@ -294,13 +304,13 @@ export function HomePage({
           {result.bestMatch && (
             <TitleCard
               item={result.bestMatch.title}
+              preferences={playbackPreferences}
+              onOpen={onOpenTitle}
               reason={result.bestMatch.reason}
               hero
               onPlay={play}
               onCheck={playbackChecks.check}
-              playbackCheck={playbackChecks.states.get(
-                result.bestMatch.title.id,
-              )}
+              playbackCheck={playbackChecks.stateFor(result.bestMatch.title)}
               onAdd={add}
               playbackEnabled={resultMode === "live"}
               pendingAction={pendingFor(result.bestMatch.title)}
@@ -314,10 +324,12 @@ export function HomePage({
                   <TitleCard
                     key={title.id}
                     item={title}
+                    preferences={playbackPreferences}
+                    onOpen={onOpenTitle}
                     reason={reason}
                     onPlay={play}
                     onCheck={playbackChecks.check}
-                    playbackCheck={playbackChecks.states.get(title.id)}
+                    playbackCheck={playbackChecks.stateFor(title)}
                     onAdd={add}
                     playbackEnabled={resultMode === "live"}
                     pendingAction={pendingFor(title)}
@@ -334,10 +346,12 @@ export function HomePage({
                   <TitleCard
                     key={title.id}
                     item={title}
+                    preferences={playbackPreferences}
+                    onOpen={onOpenTitle}
                     reason={reason}
                     onPlay={play}
                     onCheck={playbackChecks.check}
-                    playbackCheck={playbackChecks.states.get(title.id)}
+                    playbackCheck={playbackChecks.stateFor(title)}
                     onAdd={add}
                     playbackEnabled={resultMode === "live"}
                     pendingAction={pendingFor(title)}
@@ -358,10 +372,12 @@ export function HomePage({
                   <TitleCard
                     key={title.id}
                     item={title}
+                    preferences={playbackPreferences}
+                    onOpen={onOpenTitle}
                     reason={reason}
                     onPlay={play}
                     onCheck={playbackChecks.check}
-                    playbackCheck={playbackChecks.states.get(title.id)}
+                    playbackCheck={playbackChecks.stateFor(title)}
                     onAdd={add}
                     playbackEnabled={resultMode === "live"}
                     pendingAction={pendingFor(title)}
@@ -407,9 +423,11 @@ export function HomePage({
                   <TitleCard
                     key={item.id}
                     item={item}
+                    preferences={playbackPreferences}
+                    onOpen={onOpenTitle}
                     onPlay={play}
                     onCheck={playbackChecks.check}
-                    playbackCheck={playbackChecks.states.get(item.id)}
+                    playbackCheck={playbackChecks.stateFor(item)}
                     onAdd={add}
                     playbackEnabled={feed.mode === "live"}
                     pendingAction={pendingFor(item)}

@@ -6,6 +6,7 @@ import {
   MediaFormatSchema,
   MediaKindSchema,
   SourceRatingSchema,
+  type PlaybackLanguageAvailability,
 } from "./media.js";
 import {
   ExternalEntityRefSchema,
@@ -193,6 +194,8 @@ export const PlaybackRequestSchema = z
   .object({
     profileId: z.string().trim().min(1).max(120),
     titleId: z.string().trim().min(1).max(160),
+    seasonNumber: z.number().int().positive().nullable().optional(),
+    episodeNumber: z.number().int().positive().nullable().optional(),
     variant: MediaCandidateRefSchema.extend({
       variantId: z.string().trim().min(1).max(240),
     }).strict(),
@@ -488,7 +491,7 @@ export interface MediaProvider {
   checkPlayback?(
     candidate: MediaCandidateRef,
     context: ProviderContext,
-  ): Promise<void>;
+  ): Promise<PlaybackLanguageAvailability | void>;
   createPlayback(
     request: PlaybackRequest,
     context: ProviderContext,

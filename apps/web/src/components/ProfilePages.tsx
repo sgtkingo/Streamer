@@ -17,6 +17,7 @@ interface ProfilePagesProps {
   onProfileUpdated: (profile: ViewerProfile) => void;
   onRerunOnboarding: () => void;
   onSwitchAccount: () => void;
+  onDeleteProfile: () => Promise<void>;
   onBackHome: () => void;
 }
 
@@ -36,6 +37,7 @@ export function ProfilePages({
   onProfileUpdated,
   onRerunOnboarding,
   onSwitchAccount,
+  onDeleteProfile,
   onBackHome,
 }: ProfilePagesProps) {
   const [playback, setPlayback] = useState<PlaybackPreferences>(
@@ -47,6 +49,7 @@ export function ProfilePages({
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   const save = async (patch: UpdateViewerProfile) => {
     setSaving(true);
@@ -60,6 +63,22 @@ export function ProfilePages({
       setError(safeErrorMessage(reason));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const forgetProfile = async () => {
+    const confirmed = window.confirm(
+      `Forget and delete ${profile.name}'s profile?\n\nThis permanently deletes the profile and its local data. This action cannot be undone. The profile medallion will be freed.`,
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setError("");
+    try {
+      await onDeleteProfile();
+    } catch (reason) {
+      setError(safeErrorMessage(reason));
+      setDeleting(false);
     }
   };
 
@@ -167,9 +186,10 @@ export function ProfilePages({
             <button
               className="button button--logout"
               type="button"
-              onClick={onSwitchAccount}
+              disabled={deleting || saving}
+              onClick={() => void forgetProfile()}
             >
-              Log out / Switch profile
+              {deleting ? "Deleting profile…" : "Forget and delete profile"}
             </button>
             <button
               className="button button--primary"

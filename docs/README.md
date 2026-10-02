@@ -9,6 +9,7 @@ and approved future decisions remain authoritative in [`../instructions`](../ins
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) - portable Docker profile, encrypted secrets and host Ollama.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) - boundaries, data flow and invariants.
 - [`API.md`](API.md) - currently implemented HTTP endpoints.
+- [`TITLE_DETAILS.md`](TITLE_DETAILS.md) - film details, progressive episode discovery, and exact-episode playback.
 - [`INTEGRATIONS.md`](INTEGRATIONS.md) - how to add metadata, media, subtitle,
   search, agent and sync providers.
 - [`VALIDATION.md`](VALIDATION.md) - second-sight findings, verified invariants

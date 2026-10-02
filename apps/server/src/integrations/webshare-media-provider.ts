@@ -11,6 +11,8 @@ import {
   type MediaSearchRequest,
   type MediaVariant,
   type PlaybackGrant,
+  type PlaybackLanguageAvailability,
+  type PlaybackMediaInfo,
   type PlaybackRequest,
   type ProviderContext,
   type ProviderDescriptor,
@@ -27,6 +29,8 @@ export interface PlaybackTicketInput {
   profileId: string;
   providerId: string;
   titleId: string;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
   variantId: string;
   directUrl: string;
   expiresAt: string;
@@ -36,6 +40,8 @@ export interface WebshareMediaProviderOptions {
   client: WebshareClient;
   /** Stores the direct URL ephemerally and returns a same-origin ticket path. */
   issuePlaybackTicket: (input: PlaybackTicketInput) => Promise<string> | string;
+  /** Reads verified audio and playable subtitle tracks after the source check. */
+  probeMedia?: (directUrl: string) => Promise<PlaybackMediaInfo>;
   now?: () => Date;
 }
 
@@ -66,6 +72,11 @@ function mediaFormat(name: string, type: string | null): MediaFormat {
       ? ["cs"]
       : []),
     ...(/(?:^|[. _-])(?:en|eng)(?:[. _-]|$)/i.test(normalized) ? ["en"] : []),
+    ...(/(?:^|[^a-z0-9])(?:ja|jpn|jap|japanese)(?:[^a-z0-9]|$)/i.test(
+      normalized,
+    )
+      ? ["ja"]
+      : []),
   ];
   return {
     label:
@@ -90,11 +101,24 @@ function isVideoType(type: string | null): boolean {
 export class WebshareMediaProvider implements MediaProvider {
   readonly #client: WebshareClient;
   readonly #issuePlaybackTicket: WebshareMediaProviderOptions["issuePlaybackTicket"];
+  readonly #probeMedia: WebshareMediaProviderOptions["probeMedia"];
   readonly #now: () => Date;
+  readonly #languageCache = new Map<
+    string,
+    {
+      expiresAt: number;
+      languages: PlaybackLanguageAvailability;
+    }
+  >();
+  readonly #probeJobs = new Map<
+    string,
+    Promise<PlaybackLanguageAvailability | void>
+  >();
 
   constructor(options: WebshareMediaProviderOptions) {
     this.#client = options.client;
     this.#issuePlaybackTicket = options.issuePlaybackTicket;
+    this.#probeMedia = options.probeMedia;
     this.#now = options.now ?? (() => new Date());
   }
 
@@ -152,8 +176,10 @@ export class WebshareMediaProvider implements MediaProvider {
       request.seasonNumber !== null && request.episodeNumber !== null
         ? ` S${String(request.seasonNumber).padStart(2, "0")}E${String(request.episodeNumber).padStart(2, "0")}`
         : "";
+    // Episode release names frequently omit the series premiere year. Keeping
+    // it in the deep-search query would hide otherwise valid SxxEyy files.
     const query = `${request.originalTitle ?? request.title}${
-      request.year === null ? "" : ` ${request.year}`
+      episode || request.year === null ? "" : ` ${request.year}`
     }${episode}`;
     const result = await this.#client.search({ query, limit: request.limit });
     const retrievedAt = this.#now().toISOString();
@@ -232,6 +258,8 @@ export class WebshareMediaProvider implements MediaProvider {
       profileId: request.profileId,
       providerId: "webshare",
       titleId: request.titleId,
+      seasonNumber: request.seasonNumber ?? null,
+      episodeNumber: request.episodeNumber ?? null,
       variantId: variant.variantId,
       directUrl,
       expiresAt,
@@ -251,13 +279,56 @@ export class WebshareMediaProvider implements MediaProvider {
   async checkPlayback(
     rawCandidate: MediaCandidateRef,
     context: ProviderContext,
-  ): Promise<void> {
+  ): Promise<PlaybackLanguageAvailability | void> {
     const candidate = MediaCandidateRefSchema.parse(rawCandidate);
     if (candidate.providerId !== "webshare") {
       throw new ProviderRequestError("webshare", "invalid-response", false);
     }
-    await this.inspect(candidate, context);
+    const variant = await this.inspect(candidate, context);
     // createVideoLink performs a byte-range probe but does not issue a ticket.
-    await this.#client.createVideoLink(candidate.candidateId);
+    const directUrl = await this.#client.createVideoLink(candidate.candidateId);
+    if (!this.#probeMedia) return;
+    const cached = this.#languageCache.get(candidate.candidateId);
+    if (cached && cached.expiresAt > this.#now().getTime())
+      return cached.languages;
+    const active = this.#probeJobs.get(candidate.candidateId);
+    if (active) return active;
+    const job = this.#probeMedia(directUrl)
+      .then((media: PlaybackMediaInfo) => {
+        const taggedAudio = media.audioTracks
+          .map((track) => track.language?.toLowerCase())
+          .filter((language): language is string =>
+            Boolean(language && language !== "und"),
+          );
+        const languages: PlaybackLanguageAvailability = {
+          audioLanguages: [
+            ...new Set(
+              taggedAudio.length > 0
+                ? taggedAudio
+                : variant.format.audioLanguages,
+            ),
+          ],
+          subtitleLanguages: [
+            ...new Set(
+              media.subtitleTracks.map(
+                (track) => track.language?.toLowerCase() ?? "und",
+              ),
+            ),
+          ],
+        };
+        if (this.#languageCache.size >= 500) {
+          const oldest = this.#languageCache.keys().next().value;
+          if (oldest) this.#languageCache.delete(oldest);
+        }
+        this.#languageCache.set(candidate.candidateId, {
+          expiresAt: this.#now().getTime() + 10 * 60_000,
+          languages,
+        });
+        return languages;
+      })
+      .catch(() => undefined)
+      .finally(() => this.#probeJobs.delete(candidate.candidateId));
+    this.#probeJobs.set(candidate.candidateId, job);
+    return job;
   }
 }

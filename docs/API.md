@@ -67,17 +67,18 @@ or closed `sessionId` returns `DISCOVERY_SESSION_NOT_FOUND`.
 | `POST` | `/profiles` | Create an incomplete viewer profile from `{ "name": "Alex", "locale": "cs" }`; returns `409 PROFILE_LIMIT_REACHED` after five. |
 | `PATCH` | `/profiles/:profileId` | Update display name, interface locale, genre list, taste prompt or playback preferences. |
 | `GET` | `/profiles/:profileId/library` | List the profile Library. |
+| `GET` | `/profiles/:profileId/titles/:titleId` | Open a validated film/series detail. A series response includes a progressively updated season/episode guide; poll while `series.status` is `searching`. Related titles come only from the validated local catalogue. |
 | `PUT` | `/profiles/:profileId/library/:titleId` | Explicitly save a validated title. |
 | `DELETE` | `/profiles/:profileId/library/:titleId` | Remove Library membership. |
 | `GET` | `/profiles/:profileId/history` | List newest playback events. |
 | `DELETE` | `/profiles/:profileId/history/:eventId` | Remove one history event. |
 | `POST` | `/profiles/:profileId/history/clear` | Clear history after an explicit confirmation token. |
-| `POST` | `/profiles/:profileId/playback/check` | Verify a tile asynchronously without issuing a grant or recording History. |
-| `POST` | `/profiles/:profileId/playback/prepare` | Recheck the source and issue a short lived grant without changing Library or History. |
+| `POST` | `/profiles/:profileId/playback/check` | Verify a tile or selected episode asynchronously without issuing a grant or recording History; return detected audio and playable subtitle languages when media probing succeeds. |
+| `POST` | `/profiles/:profileId/playback/prepare` | Recheck the source and issue a short lived grant without changing Library or History. For a series episode, send `{ "titleId": "...", "seasonNumber": 1, "episodeNumber": 2 }`; both episode fields are required together. |
 | `POST` | `/profiles/:profileId/playback/start` | Legacy one-call prepare and start for clients that do not use the two-stage flow. |
 | `GET` | `/playback/grants/:grantId/manifest` | Probe the selected media and list duration, audio tracks and extractable text subtitles. |
 | `GET` | `/playback/grants/:grantId/media?audio=2&start=31.500` | Stream browser-compatible fragmented MP4 with selected audio and a start offset. First request records playback once. |
-| `POST` | `/playback/grants/:grantId/progress` | Save `{ "progressPercent": 37.5 }` for Continue Watching and resume. Requires a started ticket. |
+| `POST` | `/playback/grants/:grantId/progress` | Save the progress percentage, position and duration for the selected film or episode. Requires a started ticket, except a zero-percent reset before playback. |
 | `GET` | `/playback/grants/:grantId/thumbnail?at=30` | Generate a small JPEG preview near the requested second. |
 | `GET` | `/playback/grants/:grantId/subtitles/:streamIndex` | Convert an embedded text subtitle track to WebVTT. |
 | `GET` | `/playback/grants/:grantId` | Legacy direct redirect, retained for older clients. |
@@ -104,6 +105,15 @@ position. The server refreshes the private provider link for later media
 requests, so an expired direct link does not break a seek. Local subtitle files
 are converted to WebVTT in browser memory.
 Only text-based embedded subtitles can be extracted; bitmap tracks are omitted.
+
+A successful `check` returns `{ "ok": true, "audioLanguages": ["ces", "eng"],
+"subtitleLanguages": ["cs"] }` when track inspection succeeds. The language
+arrays describe the checked source or episode, not every release of a series.
+If track inspection times out, the availability check can still succeed with
+`{ "ok": true }`; the tile may then use catalogue format hints. Tiles order
+audio by the viewer's primary and secondary playback preferences, show `(sub)`
+for an alternative language with embedded text subtitles, and show `(!)` when
+the checked audio is outside those preferences and has no playable subtitles.
 Issuing a new grant revokes the previous one. Errors use stable codes such as
 `PLAYBACK_GRANT_EXPIRED` and `PLAYBACK_MEDIA_UNAVAILABLE`.
 

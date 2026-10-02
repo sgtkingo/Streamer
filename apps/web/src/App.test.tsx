@@ -59,6 +59,7 @@ function createApi(): StreamerApi {
       prompt: "",
       playback: DEFAULT_PLAYBACK_PREFERENCES,
     }),
+    deleteProfile: vi.fn().mockResolvedValue(undefined),
     updateProfile: vi.fn().mockImplementation(async (_profileId, patch) => ({
       id: "default",
       name: "Alex",
@@ -75,6 +76,11 @@ function createApi(): StreamerApi {
       generatedAt: "2026-09-27T12:00:00.000Z",
       sections: [],
     }),
+    getTitleDetail: vi.fn().mockImplementation(async (_profileId, titleId) => ({
+      title: { id: titleId },
+      series: null,
+      related: [],
+    })),
     discover: vi.fn().mockResolvedValue({
       sessionId: "session-1",
       mode: "preview",
@@ -486,6 +492,186 @@ describe("conversational Home", () => {
     progressPercent: null,
   };
 
+  it("opens the same detail view from a movie tile", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.getHome).mockResolvedValue({
+      profileId: "default",
+      mode: "preview",
+      generatedAt: "2026-09-27T12:00:00.000Z",
+      sections: [
+        {
+          id: "for-you",
+          title: "Picks For You",
+          subtitle: "Starting point",
+          freshness: "fresh",
+          items: [title],
+        },
+      ],
+    });
+    vi.mocked(api.getTitleDetail).mockResolvedValue({
+      title,
+      series: null,
+      related: [],
+    });
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.click(
+      (
+        await screen.findAllByRole("button", {
+          name: "Details for The Lake House",
+        })
+      )[0]!,
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Details for The Lake House",
+    });
+    expect(
+      within(dialog).getByRole("heading", { name: "The Lake House" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("heading", { name: "More to watch" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("heading", { name: "Seasons & episodes" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("returns from a series episode to the same season and shows its name in the player", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    const show = {
+      ...title,
+      id: "sai:title:sample-show",
+      kind: "series" as const,
+      title: "Sample Show",
+      seriesCoverage: {
+        seasonsAvailable: 2,
+        seasonsTotal: 2,
+        episodesAvailable: 2,
+        episodesTotal: 2,
+        complete: true,
+        nextEpisodeLabel: "S01 E01",
+      },
+    };
+    vi.mocked(api.getSetupStatus).mockResolvedValue({
+      complete: true,
+      tmdb: "connected",
+      webshare: "connected",
+      localAi: "connected",
+      playback: true,
+    });
+    vi.mocked(api.getHome).mockResolvedValue({
+      profileId: "default",
+      mode: "live",
+      generatedAt: "2026-09-27T12:00:00.000Z",
+      sections: [
+        {
+          id: "for-you",
+          title: "Picks For You",
+          subtitle: "Starting point",
+          freshness: "fresh",
+          items: [show],
+        },
+      ],
+    });
+    vi.mocked(api.getTitleDetail).mockResolvedValue({
+      title: show,
+      related: [],
+      series: {
+        status: "complete",
+        seasons: [
+          {
+            seasonNumber: 1,
+            title: "Season One",
+            episodes: [
+              {
+                seasonNumber: 1,
+                episodeNumber: 1,
+                title: "Pilot",
+                airDate: null,
+                availability: "available",
+              },
+            ],
+          },
+          {
+            seasonNumber: 2,
+            title: "Season Two",
+            episodes: [
+              {
+                seasonNumber: 2,
+                episodeNumber: 3,
+                title: "Third Episode",
+                airDate: null,
+                availability: "available",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.click(
+      (
+        await screen.findAllByRole("button", {
+          name: "Details for Sample Show",
+        })
+      )[0]!,
+    );
+    const details = await screen.findByRole("dialog", {
+      name: "Details for Sample Show",
+    });
+    await within(details).findByText(/Pilot/);
+    await user.click(within(details).getByRole("button", { name: "Season 2" }));
+    details.scrollTop = 180;
+    await user.click(within(details).getByRole("button", { name: /play/i }));
+
+    const player = await screen.findByRole("dialog", {
+      name: /playing sample show/i,
+    });
+    expect(
+      within(player).getByRole("heading", {
+        name: /Sample Show.*S02E03.*Third Episode/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Details for Sample Show" }),
+    ).not.toBeInTheDocument();
+    expect(api.preparePlayback).toHaveBeenCalledWith("default", show.id, {
+      seasonNumber: 2,
+      episodeNumber: 3,
+    });
+
+    await user.click(
+      within(player).getByRole("button", { name: "Close player" }),
+    );
+    const returned = await screen.findByRole("dialog", {
+      name: "Details for Sample Show",
+    });
+    expect(
+      within(returned).getByRole("button", { name: "Season 2" }),
+    ).toHaveClass("is-active");
+    expect(within(returned).getByText(/Third Episode/)).toBeInTheDocument();
+    expect(returned).toHaveProperty("scrollTop", 180);
+    await waitFor(() => expect(api.getTitleDetail).toHaveBeenCalledTimes(2));
+
+    await user.click(
+      within(returned).getByRole("button", { name: "Close details" }),
+    );
+    await user.click(await screen.findByRole("button", { name: /^▶ Play$/ }));
+    const quickPlayer = await screen.findByRole("dialog", {
+      name: /playing sample show/i,
+    });
+    expect(
+      await within(quickPlayer).findByRole("heading", {
+        name: /Sample Show.*S01E01.*Pilot/,
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("submits a natural-language request and renders the validated best match actions", async () => {
     const user = userEvent.setup();
     const api = createApi();
@@ -550,7 +736,12 @@ describe("conversational Home", () => {
     vi.mocked(api.checkPlayback).mockImplementation(
       () =>
         new Promise((resolve) => {
-          resolveCheck = () => resolve({ ok: true });
+          resolveCheck = () =>
+            resolve({
+              ok: true,
+              audioLanguages: ["jpn"],
+              subtitleLanguages: [],
+            });
         }),
     );
     vi.mocked(api.discover).mockResolvedValue({
@@ -579,7 +770,11 @@ describe("conversational Home", () => {
     );
     await user.click(screen.getByRole("button", { name: /find something/i }));
     await waitFor(() =>
-      expect(api.checkPlayback).toHaveBeenCalledWith("default", title.id),
+      expect(api.checkPlayback).toHaveBeenCalledWith(
+        "default",
+        title.id,
+        undefined,
+      ),
     );
     const checking = screen.getByRole("button", { name: /checking/i });
     expect(checking).toBeDisabled();
@@ -587,6 +782,7 @@ describe("conversational Home", () => {
     resolveCheck();
     const play = await screen.findByRole("button", { name: /play/i });
     expect(play).toBeEnabled();
+    expect(screen.getByText("JAP (!)")).toBeInTheDocument();
     await user.click(play);
     expect(
       await screen.findByRole("dialog", { name: /playing the lake house/i }),

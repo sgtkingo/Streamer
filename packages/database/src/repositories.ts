@@ -34,12 +34,14 @@ import type {
   IdempotencyRecord,
   Job,
   LibraryEntryRecord,
+  PlaybackPositionRecord,
   Profile,
   SyncOutboxOperation,
   UpdateProfileInput,
   UpsertCanonicalTitleInput,
   UpsertIntegrationConnectionInput,
   UpsertLibraryEntryInput,
+  UpsertPlaybackPositionInput,
   WatchHistoryRecord,
 } from "./types.js";
 
@@ -800,6 +802,190 @@ export class LibraryRepository {
         `Library entry '${profileId}/${titleId}' does not exist.`,
       );
     return entry;
+  }
+}
+
+export class PlaybackPositionsRepository {
+  constructor(
+    private readonly database: BetterSqlite3.Database,
+    private readonly clock: Clock,
+  ) {}
+
+  get(
+    profileId: string,
+    titleId: string,
+    seasonNumber: number | null = null,
+    episodeNumber: number | null = null,
+  ): PlaybackPositionRecord | null {
+    const row = this.database
+      .prepare(
+        `
+      SELECT * FROM playback_positions
+      WHERE profile_id = ? AND title_id = ? AND position_key = ?
+    `,
+      )
+      .get(
+        assertShortString(profileId, "Profile id", 120),
+        assertShortString(titleId, "Canonical title id", 160),
+        this.key(seasonNumber, episodeNumber),
+      ) as
+      | {
+          profile_id: string;
+          title_id: string;
+          season_number: number | null;
+          episode_number: number | null;
+          position_seconds: number;
+          duration_seconds: number;
+          progress_percent: number;
+          updated_at: string;
+        }
+      | undefined;
+    return row ? this.fromRow(row) : null;
+  }
+
+  latest(profileId: string, titleId: string): PlaybackPositionRecord | null {
+    const row = this.database
+      .prepare(
+        `
+      SELECT * FROM playback_positions
+      WHERE profile_id = ? AND title_id = ?
+      ORDER BY updated_at DESC, position_key LIMIT 1
+    `,
+      )
+      .get(
+        assertShortString(profileId, "Profile id", 120),
+        assertShortString(titleId, "Canonical title id", 160),
+      ) as
+      | {
+          profile_id: string;
+          title_id: string;
+          season_number: number | null;
+          episode_number: number | null;
+          position_seconds: number;
+          duration_seconds: number;
+          progress_percent: number;
+          updated_at: string;
+        }
+      | undefined;
+    return row ? this.fromRow(row) : null;
+  }
+
+  latestResumable(
+    profileId: string,
+    titleId: string,
+  ): PlaybackPositionRecord | null {
+    const row = this.database
+      .prepare(
+        `
+      SELECT * FROM playback_positions
+      WHERE profile_id = ? AND title_id = ? AND progress_percent >= 2 AND progress_percent < 95
+      ORDER BY updated_at DESC, position_key LIMIT 1
+    `,
+      )
+      .get(
+        assertShortString(profileId, "Profile id", 120),
+        assertShortString(titleId, "Canonical title id", 160),
+      ) as
+      | {
+          profile_id: string;
+          title_id: string;
+          season_number: number | null;
+          episode_number: number | null;
+          position_seconds: number;
+          duration_seconds: number;
+          progress_percent: number;
+          updated_at: string;
+        }
+      | undefined;
+    return row ? this.fromRow(row) : null;
+  }
+
+  upsert(input: UpsertPlaybackPositionInput): PlaybackPositionRecord {
+    if (
+      input.positionSeconds < 0 ||
+      input.durationSeconds < 0 ||
+      input.progressPercent < 0 ||
+      input.progressPercent > 100
+    ) {
+      throw new DatabaseValidationError(
+        "Playback position values are invalid.",
+      );
+    }
+    const updatedAt =
+      input.updatedAt === undefined
+        ? isoNow(this.clock)
+        : assertIsoTimestamp(input.updatedAt, "Updated at");
+    this.database
+      .prepare(
+        `
+      INSERT INTO playback_positions (
+        profile_id, title_id, position_key, season_number, episode_number,
+        position_seconds, duration_seconds, progress_percent, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (profile_id, title_id, position_key) DO UPDATE SET
+        position_seconds = excluded.position_seconds,
+        duration_seconds = excluded.duration_seconds,
+        progress_percent = excluded.progress_percent,
+        updated_at = excluded.updated_at
+    `,
+      )
+      .run(
+        assertShortString(input.profileId, "Profile id", 120),
+        assertShortString(input.titleId, "Canonical title id", 160),
+        this.key(input.seasonNumber, input.episodeNumber),
+        input.seasonNumber,
+        input.episodeNumber,
+        input.positionSeconds,
+        input.durationSeconds,
+        input.progressPercent,
+        updatedAt,
+      );
+    return this.get(
+      input.profileId,
+      input.titleId,
+      input.seasonNumber,
+      input.episodeNumber,
+    )!;
+  }
+
+  private key(
+    seasonNumber: number | null,
+    episodeNumber: number | null,
+  ): string {
+    if (
+      (seasonNumber === null) !== (episodeNumber === null) ||
+      (seasonNumber !== null &&
+        (!Number.isInteger(seasonNumber) || seasonNumber < 1)) ||
+      (episodeNumber !== null &&
+        (!Number.isInteger(episodeNumber) || episodeNumber < 1))
+    ) {
+      throw new DatabaseValidationError("Episode coordinates are invalid.");
+    }
+    return seasonNumber === null
+      ? "title"
+      : `s${seasonNumber}e${episodeNumber}`;
+  }
+
+  private fromRow(row: {
+    profile_id: string;
+    title_id: string;
+    season_number: number | null;
+    episode_number: number | null;
+    position_seconds: number;
+    duration_seconds: number;
+    progress_percent: number;
+    updated_at: string;
+  }): PlaybackPositionRecord {
+    return {
+      profileId: row.profile_id,
+      titleId: row.title_id,
+      seasonNumber: row.season_number,
+      episodeNumber: row.episode_number,
+      positionSeconds: row.position_seconds,
+      durationSeconds: row.duration_seconds,
+      progressPercent: row.progress_percent,
+      updatedAt: row.updated_at,
+    };
   }
 }
 

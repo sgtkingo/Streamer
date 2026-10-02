@@ -87,7 +87,17 @@ export function registerPlaybackRoutes(
         return reply.code(404).send(expiredResponse);
       }
       if (ticketStore.markStarted(grantId)) {
-        core.recordPlaybackStart(ticket.profileId, ticket.titleId);
+        core.recordPlaybackStart(
+          ticket.profileId,
+          ticket.titleId,
+          typeof ticket.seasonNumber === "number" &&
+            typeof ticket.episodeNumber === "number"
+            ? {
+                seasonNumber: ticket.seasonNumber,
+                episodeNumber: ticket.episodeNumber,
+              }
+            : undefined,
+        );
       }
       return reply
         .header("cache-control", "no-store, private")
@@ -138,6 +148,8 @@ export function registerPlaybackRoutes(
           additionalProperties: false,
           properties: {
             progressPercent: { type: "number", minimum: 0, maximum: 100 },
+            positionSeconds: { type: "number", minimum: 0 },
+            durationSeconds: { type: "number", minimum: 0 },
           },
         },
       },
@@ -146,12 +158,30 @@ export function registerPlaybackRoutes(
       const { grantId } = request.params as { grantId: string };
       const ticket = ticketStore.get(grantId);
       if (!ticket) return reply.code(404).send(expiredResponse);
-      if (!ticket.started) return reply.code(409).send(errorResponse);
-      const { progressPercent } = request.body as { progressPercent: number };
+      const {
+        progressPercent,
+        positionSeconds = 0,
+        durationSeconds = 0,
+      } = request.body as {
+        progressPercent: number;
+        positionSeconds?: number;
+        durationSeconds?: number;
+      };
+      if (!ticket.started && progressPercent !== 0)
+        return reply.code(409).send(errorResponse);
       core.recordPlaybackProgress(
         ticket.profileId,
         ticket.titleId,
         progressPercent,
+        positionSeconds,
+        durationSeconds,
+        typeof ticket.seasonNumber === "number" &&
+          typeof ticket.episodeNumber === "number"
+          ? {
+              seasonNumber: ticket.seasonNumber,
+              episodeNumber: ticket.episodeNumber,
+            }
+          : undefined,
       );
       return reply.code(204).send();
     },
@@ -242,7 +272,17 @@ export function registerPlaybackRoutes(
           if (activeMedia?.stop === media.stop) activeMedia = null;
         });
         if (ticketStore.markStarted(grantId)) {
-          core.recordPlaybackStart(ticket.profileId, ticket.titleId);
+          core.recordPlaybackStart(
+            ticket.profileId,
+            ticket.titleId,
+            typeof ticket.seasonNumber === "number" &&
+              typeof ticket.episodeNumber === "number"
+              ? {
+                  seasonNumber: ticket.seasonNumber,
+                  episodeNumber: ticket.episodeNumber,
+                }
+              : undefined,
+          );
         }
         return reply
           .header("content-type", "video/mp4")

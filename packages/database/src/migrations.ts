@@ -237,6 +237,28 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX idempotency_records_expiry_idx ON idempotency_records (expires_at);
     `,
   },
+  {
+    version: 6,
+    name: "per_title_and_episode_playback_positions",
+    sql: `
+      CREATE TABLE playback_positions (
+        profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        title_id TEXT NOT NULL REFERENCES canonical_titles(id) ON DELETE CASCADE,
+        position_key TEXT NOT NULL CHECK (length(position_key) BETWEEN 1 AND 40),
+        season_number INTEGER CHECK (season_number IS NULL OR season_number > 0),
+        episode_number INTEGER CHECK (episode_number IS NULL OR episode_number > 0),
+        position_seconds REAL NOT NULL CHECK (position_seconds >= 0),
+        duration_seconds REAL NOT NULL CHECK (duration_seconds >= 0),
+        progress_percent REAL NOT NULL CHECK (progress_percent BETWEEN 0 AND 100),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (profile_id, title_id, position_key),
+        CHECK ((season_number IS NULL) = (episode_number IS NULL))
+      ) STRICT;
+
+      CREATE INDEX playback_positions_title_recent_idx
+        ON playback_positions (profile_id, title_id, updated_at DESC);
+    `,
+  },
 ] as const;
 
 export function applyMigrations(

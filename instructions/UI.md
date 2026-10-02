@@ -107,10 +107,20 @@ A series is represented by a stacked/compound tile:
 - a fully available season is colorful, a partial season mixes available and
   grayscale episode states, and a missing season is grayscale;
 - `Play next` appears only when the next episode has a verified playable file;
+- tile primary action is `Play` only when S01E01 is verified and starts that
+  exact episode; otherwise it is `Episodes` and opens the season guide;
 - format and language alternatives remain selectable per season or episode.
 
 On mobile, the compound tile opens a full-width detail sheet. On desktop it may
 expand inline or open a focused detail panel.
+
+All title tiles open a detail view on poster, title or Details action. Films use
+the same detail shell without season rows; instead they show similar films or
+other saga entries only when those suggestions have been deterministically
+validated. Series details group episodes by season. Episodes already verified
+for playback remain actionable while a background deep search is looking for
+the remaining episodes. Pending episodes have a yellow indicator and the text
+`• searching...`; a failed lookup can be retried without hiding ready episodes.
 
 ## Library page
 

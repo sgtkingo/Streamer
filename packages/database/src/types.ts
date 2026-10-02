@@ -117,7 +117,11 @@ export interface EnqueueSyncOperationInput<TPayload = unknown> {
 
 export type CanonicalTitleData = Omit<
   CatalogTitle,
-  "inLibrary" | "matchPercent" | "progressPercent"
+  | "inLibrary"
+  | "matchPercent"
+  | "progressPercent"
+  | "resumePositionSeconds"
+  | "resumeEpisode"
 >;
 
 export interface CanonicalTitleRecord extends CanonicalTitleData {
@@ -153,6 +157,24 @@ export interface UpsertLibraryEntryInput {
   state?: "saved" | "in-progress" | "completed";
   progressPercent?: number | null;
   lastPlayedAt?: string | null;
+}
+
+export interface PlaybackPositionRecord {
+  profileId: string;
+  titleId: string;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
+  positionSeconds: number;
+  durationSeconds: number;
+  progressPercent: number;
+  updatedAt: string;
+}
+
+export interface UpsertPlaybackPositionInput extends Omit<
+  PlaybackPositionRecord,
+  "updatedAt"
+> {
+  updatedAt?: string;
 }
 
 export interface WatchHistoryRecord {

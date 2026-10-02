@@ -7,6 +7,7 @@ import {
   PlaybackGrantSchema,
   PlaybackPreferencesSchema,
   ViewerProfileSchema,
+  TitleDetailSchema,
   type PlaybackPreferences,
   type UpdateViewerProfile,
   type ViewerProfile,
@@ -17,6 +18,9 @@ import {
   type HomeFeed,
   type LibraryResponse,
   type PlaybackGrant,
+  type PlaybackLanguageAvailability,
+  type EpisodeSelection,
+  type TitleDetail,
 } from "@streamer-ai/contracts";
 import {
   ProfileLimitError,
@@ -34,9 +38,20 @@ function storageTitle(item: CatalogTitle) {
     inLibrary: _inLibrary,
     matchPercent: _matchPercent,
     progressPercent: _progressPercent,
+    resumePositionSeconds: _resumePositionSeconds,
+    resumeEpisode: _resumeEpisode,
     ...stored
   } = item;
   return stored;
+}
+
+function sagaStem(value: string): string {
+  const stem = value
+    .toLowerCase()
+    .replace(/\s*[:–—-].*$/, "")
+    .replace(/\s+(?:part\s*)?(?:\d+|[ivx]+)$/i, "")
+    .trim();
+  return stem.length >= 6 ? stem : "";
 }
 
 function discoveryRequestHash(request: DiscoveryRequest): string {
@@ -65,7 +80,10 @@ export class StreamerCore {
     for (const item of contentProvider.bootstrapTitles()) {
       this.database.titles.upsert(storageTitle(item));
     }
-    if (this.database.profiles.get("default") === null) {
+    if (
+      this.database.profiles.count() === 0 &&
+      this.database.settings.get<boolean>("setup.completed") !== true
+    ) {
       this.database.profiles.create({
         id: "default",
         name: "Viewer",
@@ -181,6 +199,12 @@ export class StreamerCore {
         preferences,
       }),
     );
+  }
+
+  deleteViewerProfile(profileId: string): void {
+    if (!this.database.profiles.delete(profileId)) {
+      throw new UnknownProfileError(profileId);
+    }
   }
 
   home(profileId: string): HomeFeed {
@@ -351,12 +375,15 @@ export class StreamerCore {
       const stored = this.database.titles.get(entry.titleId);
       if (stored === null) return [];
       const { createdAt: _createdAt, updatedAt: _updatedAt, ...data } = stored;
-      const title = CatalogTitleSchema.parse({
-        ...data,
-        inLibrary: true,
-        matchPercent: null,
-        progressPercent: entry.progressPercent,
-      });
+      const title = this.decorateTitle(
+        profileId,
+        CatalogTitleSchema.parse({
+          ...data,
+          inLibrary: true,
+          matchPercent: null,
+          progressPercent: entry.progressPercent,
+        }),
+      );
       return [
         {
           title,
@@ -369,6 +396,93 @@ export class StreamerCore {
       ];
     });
     return LibraryResponseSchema.parse({ profileId, items });
+  }
+
+  async titleDetail(
+    profileId: string,
+    titleId: string,
+    retry = false,
+  ): Promise<TitleDetail> {
+    this.requireProfile(profileId);
+    const stored = this.database.titles.get(titleId);
+    if (stored === null) throw new UnknownTitleError(titleId);
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...data } = stored;
+    let title = this.decorateTitle(
+      profileId,
+      CatalogTitleSchema.parse({
+        ...data,
+        inLibrary: false,
+        matchPercent: null,
+        progressPercent: null,
+      }),
+    );
+    const related = this.database.titles
+      .list()
+      .filter((other) => other.id !== title.id && other.kind === title.kind)
+      .map((other) => ({
+        other,
+        score:
+          other.genres.filter((genre) => title.genres.includes(genre)).length +
+          (sagaStem(title.title) !== "" &&
+          sagaStem(other.title) === sagaStem(title.title)
+            ? 3
+            : 0),
+      }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map(({ other }) => {
+        const {
+          createdAt: _createdAt,
+          updatedAt: _updatedAt,
+          ...record
+        } = other;
+        return this.decorateTitle(
+          profileId,
+          CatalogTitleSchema.parse({
+            ...record,
+            inLibrary: false,
+            matchPercent: null,
+            progressPercent: null,
+          }),
+        );
+      });
+    const series =
+      title.kind === "series" && this.contentProvider.getSeriesDetail
+        ? await this.contentProvider.getSeriesDetail(profileId, title, retry)
+        : null;
+    if (series && series.seasons.length > 0 && title.formats.length > 0) {
+      const episodes = series.seasons.flatMap((season) => season.episodes);
+      const available = episodes.filter(
+        (episode) => episode.availability === "available",
+      );
+      if (
+        available.length > 0 &&
+        (available.length < episodes.length || series.status === "complete")
+      ) {
+        const coverage = {
+          seasonsAvailable: new Set(
+            available.map((episode) => episode.seasonNumber),
+          ).size,
+          seasonsTotal: series.seasons.filter(
+            (season) => season.episodes.length > 0,
+          ).length,
+          episodesAvailable: available.length,
+          episodesTotal: episodes.length,
+          complete: series.status === "complete",
+          nextEpisodeLabel: `S${String(available[0]!.seasonNumber).padStart(2, "0")} E${String(available[0]!.episodeNumber).padStart(2, "0")}`,
+        };
+        if (JSON.stringify(coverage) !== JSON.stringify(title.seriesCoverage)) {
+          title = CatalogTitleSchema.parse({
+            ...title,
+            seriesCoverage: coverage,
+            availability: coverage.complete ? "available" : "partial",
+          });
+          this.database.titles.upsert(storageTitle(title));
+        }
+      }
+    }
+    return TitleDetailSchema.parse({ title, series, related });
   }
 
   addToLibrary(profileId: string, titleId: string): LibraryResponse {
@@ -405,7 +519,11 @@ export class StreamerCore {
     };
   }
 
-  async checkPlayback(profileId: string, titleId: string): Promise<void> {
+  async checkPlayback(
+    profileId: string,
+    titleId: string,
+    episode?: EpisodeSelection,
+  ): Promise<PlaybackLanguageAvailability | void> {
     this.requireProfile(profileId);
     const item = this.database.titles.get(titleId);
     if (item === null) throw new UnknownTitleError(titleId);
@@ -423,8 +541,14 @@ export class StreamerCore {
       progressPercent:
         this.database.library.get(profileId, titleId)?.progressPercent ?? null,
     });
+    if (episode && title.kind !== "series")
+      throw new UnplayableTitleError(titleId);
     try {
-      await this.contentProvider.checkPlayback(profileId, title);
+      return await this.contentProvider.checkPlayback(
+        profileId,
+        title,
+        episode,
+      );
     } catch {
       throw new PlaybackRecheckError(titleId);
     }
@@ -433,6 +557,7 @@ export class StreamerCore {
   async preparePlayback(
     profileId: string,
     titleId: string,
+    episode?: EpisodeSelection,
   ): Promise<PlaybackGrant> {
     this.requireProfile(profileId);
     const item = this.database.titles.get(titleId);
@@ -451,10 +576,12 @@ export class StreamerCore {
       progressPercent:
         this.database.library.get(profileId, titleId)?.progressPercent ?? null,
     });
+    if (episode && title.kind !== "series")
+      throw new UnplayableTitleError(titleId);
     let playback: PlaybackGrant;
     try {
       playback = PlaybackGrantSchema.parse(
-        await this.contentProvider.preparePlayback(profileId, title),
+        await this.contentProvider.preparePlayback(profileId, title, episode),
       );
     } catch {
       throw new PlaybackRecheckError(titleId);
@@ -481,6 +608,7 @@ export class StreamerCore {
   recordPlaybackStart(
     profileId: string,
     titleId: string,
+    episode?: EpisodeSelection,
   ): { eventId: string; library: LibraryResponse } {
     this.requireProfile(profileId);
     const item = this.database.titles.get(titleId);
@@ -488,10 +616,17 @@ export class StreamerCore {
     const now = this.now().toISOString();
     const eventId = randomUUID();
     const previousEntry = this.database.library.get(profileId, titleId);
+    const episodePosition = this.database.playbackPositions.get(
+      profileId,
+      titleId,
+      episode?.seasonNumber ?? null,
+      episode?.episodeNumber ?? null,
+    );
     const previousProgress =
-      previousEntry?.state === "completed"
+      episodePosition?.progressPercent ??
+      (previousEntry?.state === "completed"
         ? 0
-        : (previousEntry?.progressPercent ?? 0);
+        : (previousEntry?.progressPercent ?? 0));
     this.database.transaction(() => {
       this.database.library.upsert({
         profileId,
@@ -506,10 +641,9 @@ export class StreamerCore {
         profileId,
         titleId,
         eventType: "start",
-        episodeLabel:
-          item.kind === "series"
-            ? (item.seriesCoverage?.nextEpisodeLabel ?? null)
-            : null,
+        episodeLabel: episode
+          ? `S${String(episode.seasonNumber).padStart(2, "0")} E${String(episode.episodeNumber).padStart(2, "0")}`
+          : null,
         progressPercent: previousProgress,
         occurredAt: now,
       });
@@ -521,12 +655,24 @@ export class StreamerCore {
     profileId: string,
     titleId: string,
     progressPercent: number,
+    positionSeconds = 0,
+    durationSeconds = 0,
+    episode?: EpisodeSelection,
   ): void {
     this.requireProfile(profileId);
     if (this.database.titles.get(titleId) === null) {
       throw new UnknownTitleError(titleId);
     }
     const bounded = Math.max(0, Math.min(100, progressPercent));
+    this.database.playbackPositions.upsert({
+      profileId,
+      titleId,
+      seasonNumber: episode?.seasonNumber ?? null,
+      episodeNumber: episode?.episodeNumber ?? null,
+      positionSeconds: Math.max(0, positionSeconds),
+      durationSeconds: Math.max(0, durationSeconds),
+      progressPercent: bounded,
+    });
     this.database.library.upsert({
       profileId,
       titleId,
@@ -575,10 +721,25 @@ export class StreamerCore {
 
   private decorateTitle(profileId: string, item: CatalogTitle): CatalogTitle {
     const entry = this.database.library.get(profileId, item.id);
+    const latestPosition = this.database.playbackPositions.latestResumable(
+      profileId,
+      item.id,
+    );
     return CatalogTitleSchema.parse({
       ...item,
       inLibrary: entry !== null,
-      progressPercent: entry?.progressPercent ?? null,
+      progressPercent:
+        latestPosition?.progressPercent ?? entry?.progressPercent ?? null,
+      resumePositionSeconds: latestPosition?.positionSeconds ?? null,
+      resumeEpisode:
+        latestPosition &&
+        latestPosition.seasonNumber !== null &&
+        latestPosition.episodeNumber !== null
+          ? {
+              seasonNumber: latestPosition.seasonNumber,
+              episodeNumber: latestPosition.episodeNumber,
+            }
+          : null,
     });
   }
 

@@ -8,6 +8,9 @@ import {
   type DiscoveryResponse,
   type HomeFeed,
   type PlaybackGrant,
+  type PlaybackLanguageAvailability,
+  type SeriesDetail,
+  type EpisodeSelection,
 } from "@streamer-ai/contracts";
 import { randomUUID } from "node:crypto";
 
@@ -34,11 +37,21 @@ export interface StreamerContentProvider {
     context?: DiscoveryConversationContext,
   ): Promise<DiscoveryResponse>;
   /** Revalidate availability and mint a short-lived URL immediately before playback. */
-  checkPlayback?(profileId: string, title: CatalogTitle): Promise<void>;
+  checkPlayback?(
+    profileId: string,
+    title: CatalogTitle,
+    episode?: EpisodeSelection,
+  ): Promise<PlaybackLanguageAvailability | void>;
   preparePlayback?(
     profileId: string,
     title: CatalogTitle,
+    episode?: EpisodeSelection,
   ): Promise<PlaybackGrant>;
+  getSeriesDetail?(
+    profileId: string,
+    title: CatalogTitle,
+    retry?: boolean,
+  ): Promise<SeriesDetail>;
 }
 
 export interface DiscoveryConversationMessage {

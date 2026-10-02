@@ -143,6 +143,14 @@ export function App({ api = apiClient, forceOnboarding = false }: AppProps) {
         setActiveProfile(null);
         window.history.pushState({}, "", "/");
       }}
+      onDeleteProfile={async () => {
+        await api.deleteProfile(activeProfile.id);
+        setProfiles((current) =>
+          current.filter((item) => item.id !== activeProfile.id),
+        );
+        setActiveProfile(null);
+        window.history.pushState({}, "", "/");
+      }}
       onRerunOnboarding={() => setRerunProfile(activeProfile)}
       playbackEnabled={playbackEnabled}
     />

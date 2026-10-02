@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CatalogTitle,
+  EpisodeSelection,
   HistoryResponse,
   LibraryResponse,
   LibraryState,
+  PlaybackPreferences,
 } from "@streamer-ai/contracts";
 import type { PlaybackGrant, StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
@@ -13,10 +15,16 @@ import { usePlaybackChecks } from "./usePlaybackChecks";
 interface LibraryPageProps {
   api: StreamerApi;
   profileId: string;
+  playbackPreferences: PlaybackPreferences;
   version: number;
   onBackHome: () => void;
   playbackEnabled: boolean;
-  onPlaybackReady: (item: CatalogTitle, grant: PlaybackGrant) => void;
+  onPlaybackReady: (
+    item: CatalogTitle,
+    grant: PlaybackGrant,
+    episode?: EpisodeSelection,
+  ) => void;
+  onOpenTitle: (item: CatalogTitle) => void;
 }
 
 type KindFilter = "all" | "movie" | "series";
@@ -31,10 +39,12 @@ interface PendingLibraryAction {
 export function LibraryPage({
   api,
   profileId,
+  playbackPreferences,
   version,
   onBackHome,
   playbackEnabled,
   onPlaybackReady,
+  onOpenTitle,
 }: LibraryPageProps) {
   const [library, setLibrary] = useState<LibraryResponse | null>(null);
   const [libraryLoading, setLibraryLoading] = useState(true);
@@ -158,16 +168,16 @@ export function LibraryPage({
     }
   };
 
-  const play = async (item: CatalogTitle) => {
+  const play = async (item: CatalogTitle, episode?: EpisodeSelection) => {
     if (pendingLibraryAction) return;
     setPendingLibraryAction({ titleId: item.id, kind: "play" });
     setLibraryError("");
     setLibraryNotice("");
     try {
-      const response = await api.preparePlayback(profileId, item.id);
-      onPlaybackReady(item, response.playback);
+      const response = await api.preparePlayback(profileId, item.id, episode);
+      onPlaybackReady(item, response.playback, episode);
     } catch (error) {
-      playbackChecks.markFailed(item.id, safeErrorMessage(error));
+      playbackChecks.markFailed(item, safeErrorMessage(error), episode);
     } finally {
       setPendingLibraryAction(null);
     }
@@ -410,9 +420,11 @@ export function LibraryPage({
             <TitleCard
               key={entry.title.id}
               item={entry.title}
+              preferences={playbackPreferences}
+              onOpen={onOpenTitle}
               onPlay={play}
               onCheck={playbackChecks.check}
-              playbackCheck={playbackChecks.states.get(entry.title.id)}
+              playbackCheck={playbackChecks.stateFor(entry.title)}
               onAdd={() => undefined}
               onRemove={remove}
               pendingAction={

@@ -137,6 +137,8 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
   const stores = createStores(options, database, environment, runtimeConfig);
   const playbackTicketStore =
     options.playbackTicketStore ?? new InMemoryPlaybackTicketStore(now);
+  const playbackMediaEngine =
+    options.playbackMediaEngine ?? new FfmpegPlaybackMediaEngine();
   const webshareClient = new WebshareClient({
     secretStore: stores.secretStore,
     fetch: options.providerFetch ?? defaultProviderFetch(),
@@ -161,6 +163,7 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
           media: new WebshareMediaProvider({
             client: webshareClient,
             issuePlaybackTicket: (input) => playbackTicketStore.issue(input),
+            probeMedia: (directUrl) => playbackMediaEngine.probe(directUrl),
             now,
           }),
           integrationStateStore: stores.integrationStateStore,
@@ -231,7 +234,7 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
     app,
     playbackTicketStore,
     core,
-    options.playbackMediaEngine ?? new FfmpegPlaybackMediaEngine(),
+    playbackMediaEngine,
     async (ticket) =>
       ticket.providerId === "webshare"
         ? webshareClient.createVideoLink(ticket.variantId)

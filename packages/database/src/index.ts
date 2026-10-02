@@ -9,6 +9,7 @@ export {
   IntegrationsRepository,
   JobsRepository,
   LibraryRepository,
+  PlaybackPositionsRepository,
   ProfilesRepository,
   SettingsRepository,
   SyncOutboxRepository,

@@ -9,6 +9,7 @@ import {
   IntegrationsRepository,
   JobsRepository,
   LibraryRepository,
+  PlaybackPositionsRepository,
   ProfilesRepository,
   SettingsRepository,
   SyncOutboxRepository,
@@ -27,6 +28,7 @@ export class StreamerDatabase {
   readonly integrations: IntegrationsRepository;
   readonly titles: CatalogTitlesRepository;
   readonly library: LibraryRepository;
+  readonly playbackPositions: PlaybackPositionsRepository;
   readonly history: HistoryRepository;
   readonly discoverySessions: DiscoverySessionsRepository;
   readonly idempotency: IdempotencyRepository;
@@ -44,6 +46,7 @@ export class StreamerDatabase {
     this.integrations = new IntegrationsRepository(connection, clock);
     this.titles = new CatalogTitlesRepository(connection, clock);
     this.library = new LibraryRepository(connection, clock);
+    this.playbackPositions = new PlaybackPositionsRepository(connection, clock);
     this.history = new HistoryRepository(connection, clock);
     this.discoverySessions = new DiscoverySessionsRepository(connection, clock);
     this.idempotency = new IdempotencyRepository(connection, clock);

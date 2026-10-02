@@ -44,6 +44,8 @@ export class InMemoryPlaybackTicketStore implements PlaybackTicketStore {
     }
     this.#active = {
       ...input,
+      seasonNumber: input.seasonNumber ?? null,
+      episodeNumber: input.episodeNumber ?? null,
       createdAt: this.now().toISOString(),
       started: false,
     };

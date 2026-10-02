@@ -13,6 +13,8 @@ import type {
   IntegrationId,
   ViewerProfile,
   UpdateViewerProfile,
+  TitleDetail,
+  EpisodeSelection,
 } from "@streamer-ai/contracts";
 import { DEFAULT_PLAYBACK_PREFERENCES } from "../playback-preferences";
 
@@ -55,6 +57,8 @@ export interface PlaybackPrepareResult {
 
 export interface PlaybackCheckResult {
   ok: true;
+  audioLanguages?: string[];
+  subtitleLanguages?: string[];
 }
 
 export interface StreamerApi {
@@ -71,11 +75,17 @@ export interface StreamerApi {
     name: string;
     locale: "en" | "cs" | "de";
   }): Promise<ViewerProfile>;
+  deleteProfile(profileId: string): Promise<void>;
   updateProfile(
     profileId: string,
     patch: UpdateViewerProfile,
   ): Promise<ViewerProfile>;
   getHome(profileId: string): Promise<HomeFeed>;
+  getTitleDetail(
+    profileId: string,
+    titleId: string,
+    retry?: boolean,
+  ): Promise<TitleDetail>;
   discover(request: DiscoveryRequest): Promise<DiscoveryResponse>;
   getLibrary(profileId: string): Promise<LibraryResponse>;
   addToLibrary(profileId: string, titleId: string): Promise<LibraryResponse>;
@@ -90,14 +100,21 @@ export interface StreamerApi {
   preparePlayback(
     profileId: string,
     titleId: string,
+    episode?: EpisodeSelection,
   ): Promise<PlaybackPrepareResult>;
   checkPlayback(
     profileId: string,
     titleId: string,
+    episode?: EpisodeSelection,
   ): Promise<PlaybackCheckResult>;
   getPlaybackManifest(grantId: string): Promise<PlaybackMediaInfo>;
   closePlayback(grantId: string): Promise<void>;
-  savePlaybackProgress(grantId: string, progressPercent: number): Promise<void>;
+  savePlaybackProgress(
+    grantId: string,
+    progressPercent: number,
+    positionSeconds?: number,
+    durationSeconds?: number,
+  ): Promise<void>;
 }
 
 class ApiError extends Error {
@@ -391,6 +408,10 @@ export const apiClient: StreamerApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  deleteProfile: (profileId) =>
+    request<void>(`/profiles/${encodeURIComponent(profileId)}`, {
+      method: "DELETE",
+    }),
   updateProfile: (profileId, patch) =>
     request<ViewerProfile>(`/profiles/${encodeURIComponent(profileId)}`, {
       method: "PATCH",
@@ -398,6 +419,10 @@ export const apiClient: StreamerApi = {
     }),
   getHome: (profileId) =>
     request<HomeFeed>(`/home?profileId=${encodeURIComponent(profileId)}`),
+  getTitleDetail: (profileId, titleId, retry = false) =>
+    request<TitleDetail>(
+      `/profiles/${encodeURIComponent(profileId)}/titles/${encodeURIComponent(titleId)}${retry ? "?retry=true" : ""}`,
+    ),
   discover: (payload) =>
     request<DiscoveryResponse>("/discovery/sessions", {
       method: "POST",
@@ -440,15 +465,15 @@ export const apiClient: StreamerApi = {
       `/profiles/${encodeURIComponent(profileId)}/playback/start`,
       { method: "POST", body: JSON.stringify({ titleId }) },
     ),
-  preparePlayback: (profileId, titleId) =>
+  preparePlayback: (profileId, titleId, episode) =>
     request<PlaybackPrepareResult>(
       `/profiles/${encodeURIComponent(profileId)}/playback/prepare`,
-      { method: "POST", body: JSON.stringify({ titleId }) },
+      { method: "POST", body: JSON.stringify({ titleId, ...episode }) },
     ),
-  checkPlayback: (profileId, titleId) =>
+  checkPlayback: (profileId, titleId, episode) =>
     request<PlaybackCheckResult>(
       `/profiles/${encodeURIComponent(profileId)}/playback/check`,
-      { method: "POST", body: JSON.stringify({ titleId }) },
+      { method: "POST", body: JSON.stringify({ titleId, ...episode }) },
     ),
   getPlaybackManifest: (grantId) =>
     request<PlaybackMediaInfo>(
@@ -458,10 +483,19 @@ export const apiClient: StreamerApi = {
     request<void>(`/playback/grants/${encodeURIComponent(grantId)}`, {
       method: "DELETE",
     }),
-  savePlaybackProgress: (grantId, progressPercent) =>
+  savePlaybackProgress: (
+    grantId,
+    progressPercent,
+    positionSeconds = 0,
+    durationSeconds = 0,
+  ) =>
     request<void>(`/playback/grants/${encodeURIComponent(grantId)}/progress`, {
       method: "POST",
-      body: JSON.stringify({ progressPercent }),
+      body: JSON.stringify({
+        progressPercent,
+        positionSeconds,
+        durationSeconds,
+      }),
     }),
 };
 

@@ -112,7 +112,7 @@ export function registerSystemRoutes(
     const localAiEnabled =
       dependencies.database.settings.get<boolean>("setup.localAiEnabled") ===
       true;
-    const complete = completionRecorded && profile !== null;
+    const complete = completionRecorded;
     const playbackAvailable = webshare.configured;
     const requiredSteps = [
       ...(!complete ? ["complete_profile"] : []),

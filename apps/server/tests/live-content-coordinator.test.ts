@@ -6,6 +6,7 @@ import type {
 } from "@streamer-ai/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { LiveContentCoordinator } from "../src/services/live-content-coordinator.js";
+import { PreviewContentProvider } from "../src/services/content-provider.js";
 import { NonPersistentMemoryIntegrationStateStore } from "../src/stores/integration-state-store.js";
 
 const NOW = "2026-09-29T20:00:00.000Z";
@@ -158,6 +159,125 @@ function coordinatorDependencies() {
 }
 
 describe("LiveContentCoordinator", () => {
+  it("fills an episode guide in the background while an already verified episode stays playable", async () => {
+    const preview = new PreviewContentProvider()
+      .bootstrapTitles()
+      .find((item) => item.kind === "series")!;
+    const title = {
+      ...preview,
+      id: "sai:tmdb:series:42",
+      title: "Sample Show",
+      originalTitle: "Sample Show",
+      year: 2021,
+    };
+    const first = {
+      ref: { providerId: "webshare", candidateId: "episode-1" },
+      releaseName: "Sample.Show.2021.S01E01.mkv",
+      sizeBytes: 100,
+      seasonNumber: 1,
+      episodeNumber: 1,
+      confidence: 0.9,
+      provenance: { ...provenance, providerId: "webshare" },
+    };
+    const second = {
+      ...first,
+      ref: { providerId: "webshare", candidateId: "episode-2" },
+      releaseName: "Sample.Show.2021.S01E02.mkv",
+      episodeNumber: 2,
+    };
+    let releaseSecond!: (value: (typeof second)[]) => void;
+    const secondSearch = new Promise<(typeof second)[]>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const media = {
+      search: vi
+        .fn()
+        .mockImplementation(async (request) =>
+          request.episodeNumber === 1
+            ? [first]
+            : request.episodeNumber === 2
+              ? secondSearch
+              : [],
+        ),
+      inspect: vi
+        .fn()
+        .mockImplementation(async (ref) => ({
+          ref,
+          variantId: ref.candidateId,
+        })),
+      createPlayback: vi.fn().mockResolvedValue({ titleId: title.id }),
+    } as unknown as MediaProvider;
+    const metadata = {
+      getSeriesStructure: vi.fn().mockResolvedValue({
+        seriesRef: {
+          providerId: "tmdb",
+          entityType: "series",
+          externalId: "42",
+        },
+        seasons: [
+          {
+            ref: { providerId: "tmdb", entityType: "season", externalId: "43" },
+            seasonNumber: 1,
+            title: "Season One",
+            provenance,
+            episodes: [1, 2].map((episodeNumber) => ({
+              ref: {
+                providerId: "tmdb",
+                entityType: "episode",
+                externalId: String(43 + episodeNumber),
+              },
+              episodeNumber,
+              title: `Episode ${episodeNumber}`,
+              airDate: "2021-01-01",
+              runtimeMinutes: 42,
+              provenance,
+            })),
+          },
+        ],
+        complete: true,
+        provenance,
+      }),
+    } as unknown as MetadataProvider;
+    const coordinator = new LiveContentCoordinator({
+      agent: {} as AgentProvider,
+      metadata,
+      media,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    await coordinator.getSeriesDetail("default", title);
+    await vi.waitFor(async () => {
+      const detail = await coordinator.getSeriesDetail("default", title);
+      expect(detail.seasons[0]?.episodes[0]?.availability).toBe("available");
+      expect(detail.seasons[0]?.episodes[1]?.availability).toBe("searching");
+    });
+    await coordinator.preparePlayback("default", title, {
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    expect(media.createPlayback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: expect.objectContaining({ candidateId: "episode-1" }),
+      }),
+      expect.anything(),
+    );
+    releaseSecond([second]);
+    await vi.waitFor(async () => {
+      expect((await coordinator.getSeriesDetail("default", title)).status).toBe(
+        "complete",
+      );
+    });
+  });
   it("uses the agent only for proposals and groups deterministically validated titles", async () => {
     const dependencies = coordinatorDependencies();
     const coordinator = new LiveContentCoordinator({
