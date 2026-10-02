@@ -11,11 +11,18 @@ import type {
   PlaybackGrant as PlaybackGrantContract,
   PlaybackMediaInfo,
   IntegrationId,
+  ViewerProfile,
+  UpdateViewerProfile,
 } from "@streamer-ai/contracts";
+import { DEFAULT_PLAYBACK_PREFERENCES } from "../playback-preferences";
 
 export type ConnectionState = "connected" | "not-configured" | "unavailable";
 export type { PlaybackGrant, PlaybackMediaInfo } from "@streamer-ai/contracts";
 export type ProfileDraft = SetupProfile;
+export type {
+  ViewerProfile,
+  UpdateViewerProfile,
+} from "@streamer-ai/contracts";
 export type ConnectionResult = IntegrationConnectionResult;
 
 export interface SetupStatus {
@@ -59,6 +66,15 @@ export interface StreamerApi {
   ): Promise<ConnectionResult>;
   detectLocalAi(): Promise<LocalAiResult>;
   completeSetup(request: CompleteSetupRequest): Promise<void>;
+  getProfiles(): Promise<{ items: ViewerProfile[]; limit: number }>;
+  createProfile(request: {
+    name: string;
+    locale: "en" | "cs" | "de";
+  }): Promise<ViewerProfile>;
+  updateProfile(
+    profileId: string,
+    patch: UpdateViewerProfile,
+  ): Promise<ViewerProfile>;
   getHome(profileId: string): Promise<HomeFeed>;
   discover(request: DiscoveryRequest): Promise<DiscoveryResponse>;
   getLibrary(profileId: string): Promise<LibraryResponse>;
@@ -110,6 +126,7 @@ const domainErrorMessages: Record<string, string> = {
     "This video could not be opened. Try another title or stream later.",
   PROFILE_NOT_FOUND:
     "This profile is not available. Finish setup or choose another profile.",
+  PROFILE_LIMIT_REACHED: "This installation already has five profiles.",
   HISTORY_EVENT_NOT_FOUND: "That history item no longer exists.",
   IDEMPOTENCY_CONFLICT:
     "This request conflicts with an earlier discovery request. Please send it again.",
@@ -325,6 +342,7 @@ function readProfile(value: unknown): ProfileDraft | undefined {
     name: value.name,
     locale: value.locale as ProfileDraft["locale"],
     preferences: value.preferences,
+    playback: DEFAULT_PLAYBACK_PREFERENCES,
   };
 }
 
@@ -365,6 +383,18 @@ export const apiClient: StreamerApi = {
     request<void>("/setup/complete", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  getProfiles: () =>
+    request<{ items: ViewerProfile[]; limit: number }>("/profiles"),
+  createProfile: (payload) =>
+    request<ViewerProfile>("/profiles", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateProfile: (profileId, patch) =>
+    request<ViewerProfile>(`/profiles/${encodeURIComponent(profileId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
     }),
   getHome: (profileId) =>
     request<HomeFeed>(`/home?profileId=${encodeURIComponent(profileId)}`),

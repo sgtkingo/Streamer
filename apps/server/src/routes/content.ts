@@ -1,7 +1,10 @@
 import {
   CompleteSetupRequestSchema,
+  CreateViewerProfileSchema,
   DiscoveryRequestSchema,
+  UpdateViewerProfileSchema,
 } from "@streamer-ai/contracts";
+import { ProfileLimitError } from "@streamer-ai/database";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   StreamerCore,
@@ -37,6 +40,14 @@ const titleParamsSchema = {
 } as const;
 
 function sendDomainError(reply: FastifyReply, error: unknown) {
+  if (error instanceof ProfileLimitError) {
+    return reply.code(409).send({
+      error: {
+        code: "PROFILE_LIMIT_REACHED",
+        message: "This installation already has five profiles.",
+      },
+    });
+  }
   if (error instanceof UnknownProfileError) {
     return reply.code(404).send({
       error: {
@@ -120,6 +131,52 @@ export function registerContentRoutes(
   app: FastifyInstance,
   dependencies: ContentRouteDependencies,
 ): void {
+  app.get("/api/v1/profiles", async () => ({
+    items: dependencies.core.listProfiles(),
+    limit: 5,
+  }));
+
+  app.post("/api/v1/profiles", async (request, reply) => {
+    const parsed = CreateViewerProfileSchema.safeParse(request.body);
+    if (!parsed.success)
+      return reply.code(400).send({
+        error: {
+          code: "INVALID_REQUEST",
+          message: "Enter a valid profile name.",
+        },
+      });
+    try {
+      return reply
+        .code(201)
+        .send(dependencies.core.createViewerProfile(parsed.data));
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
+  });
+
+  app.patch(
+    "/api/v1/profiles/:profileId",
+    { schema: { params: profileParamsSchema } },
+    async (request, reply) => {
+      const parsed = UpdateViewerProfileSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply.code(400).send({
+          error: {
+            code: "INVALID_REQUEST",
+            message: "Check the profile fields.",
+          },
+        });
+      try {
+        return dependencies.core.updateViewerProfile(
+          (request.params as { profileId: string }).profileId,
+          parsed.data,
+        );
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
+  );
+
   app.get(
     "/api/v1/home",
     {
@@ -392,11 +449,17 @@ export function registerContentRoutes(
         },
       });
     }
-    dependencies.core.configureProfile({
-      id: "default",
-      ...parsed.data.profile,
-      localAiEnabled: parsed.data.localAiEnabled,
-    });
+    const profileId = parsed.data.profileId ?? "default";
+    try {
+      if (profileId !== "default") dependencies.core.requireProfile(profileId);
+      dependencies.core.configureProfile({
+        id: profileId,
+        ...parsed.data.profile,
+        localAiEnabled: parsed.data.localAiEnabled,
+      });
+    } catch (error) {
+      return sendDomainError(reply, error);
+    }
     return reply.code(204).send();
   });
 }

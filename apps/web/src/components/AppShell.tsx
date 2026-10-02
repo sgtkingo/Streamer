@@ -1,24 +1,44 @@
-import { useEffect, useState } from "react";
-import type { CatalogTitle, PlaybackGrant } from "@streamer-ai/contracts";
+import { useEffect, useRef, useState } from "react";
+import type {
+  CatalogTitle,
+  PlaybackGrant,
+  ViewerProfile,
+} from "@streamer-ai/contracts";
 import type { StreamerApi } from "../api/client";
 import { Brand } from "./Brand";
 import { HomePage } from "./HomePage";
 import { LibraryPage } from "./LibraryPage";
+import { ProfilePages, type ProfilePage } from "./ProfilePages";
 import { VideoPlayer } from "./VideoPlayer";
 
-type Route = "home" | "library";
+type Route = "home" | "library" | ProfilePage;
 
 function routeFromLocation(): Route {
-  return window.location.pathname.startsWith("/library") ? "library" : "home";
+  const path = window.location.pathname.slice(1);
+  return [
+    "library",
+    "settings",
+    "preferences",
+    "account",
+    "statistics",
+  ].includes(path)
+    ? (path as Route)
+    : "home";
 }
 
 export function AppShell({
   api,
-  viewerName = "Viewer",
+  profile,
+  onProfileUpdated,
+  onSwitchAccount,
+  onRerunOnboarding,
   playbackEnabled = false,
 }: {
   api: StreamerApi;
-  viewerName?: string;
+  profile: ViewerProfile;
+  onProfileUpdated: (profile: ViewerProfile) => void;
+  onSwitchAccount: () => void;
+  onRerunOnboarding: () => void;
   playbackEnabled?: boolean;
 }) {
   const [route, setRoute] = useState<Route>(routeFromLocation);
@@ -27,7 +47,9 @@ export function AppShell({
     title: CatalogTitle;
     grant: PlaybackGrant;
   } | null>(null);
-  const profileId = "default";
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const profileId = profile.id;
 
   useEffect(() => {
     const update = () => setRoute(routeFromLocation());
@@ -35,9 +57,27 @@ export function AppShell({
     return () => window.removeEventListener("popstate", update);
   }, []);
 
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!profileMenuRef.current?.contains(event.target as Node))
+        setProfileMenuOpen(false);
+    };
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setProfileMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeEscape);
+    };
+  }, [profileMenuOpen]);
+
   const navigate = (next: Route) => {
-    window.history.pushState({}, "", next === "library" ? "/library" : "/");
+    window.history.pushState({}, "", next === "home" ? "/" : `/${next}`);
     setRoute(next);
+    setProfileMenuOpen(false);
     window.scrollTo({ top: 0, behavior: "auto" });
   };
 
@@ -79,13 +119,61 @@ export function AppShell({
             <a href="#for-you">For You</a>
           </nav>
         )}
-        <span
-          className="avatar"
-          role="img"
-          aria-label={`Current profile: ${viewerName}`}
-        >
-          {viewerName.slice(0, 1).toUpperCase()}
-        </span>
+        <div className="profile-menu-anchor" ref={profileMenuRef}>
+          <button
+            className="avatar avatar--button"
+            type="button"
+            aria-label={`Profile menu for ${profile.name}`}
+            aria-expanded={profileMenuOpen}
+            aria-haspopup="menu"
+            onClick={() => setProfileMenuOpen((open) => !open)}
+          >
+            {profile.name.slice(0, 1).toUpperCase()}
+          </button>
+          {profileMenuOpen && (
+            <div className="profile-menu" role="menu" aria-label="Profile menu">
+              <strong>{profile.name}</strong>
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => navigate("settings")}
+              >
+                Settings
+              </button>
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => navigate("preferences")}
+              >
+                Preferences
+              </button>
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => navigate("account")}
+              >
+                My account
+              </button>
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => navigate("statistics")}
+              >
+                Statistics
+              </button>
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  onSwitchAccount();
+                }}
+              >
+                Log out / Switch profile
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
       {route === "home" ? (
@@ -98,7 +186,7 @@ export function AppShell({
             setActivePlayback({ title, grant })
           }
         />
-      ) : (
+      ) : route === "library" ? (
         <LibraryPage
           api={api}
           profileId={profileId}
@@ -109,12 +197,24 @@ export function AppShell({
             setActivePlayback({ title, grant })
           }
         />
+      ) : (
+        <ProfilePages
+          key={`${profile.id}:${route}`}
+          page={route}
+          api={api}
+          profile={profile}
+          onProfileUpdated={onProfileUpdated}
+          onRerunOnboarding={onRerunOnboarding}
+          onSwitchAccount={onSwitchAccount}
+          onBackHome={() => navigate("home")}
+        />
       )}
       {activePlayback && (
         <VideoPlayer
           api={api}
           title={activePlayback.title}
           grant={activePlayback.grant}
+          preferences={profile.playback}
           onClose={() => {
             setActivePlayback(null);
             setLibraryVersion((value) => value + 1);

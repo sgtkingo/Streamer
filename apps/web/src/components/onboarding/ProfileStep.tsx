@@ -1,4 +1,5 @@
 import type { ProfileDraft } from "../../api/client";
+import { PlaybackLanguageFields } from "../PlaybackLanguageFields";
 
 const preferences = [
   "Drama",
@@ -77,6 +78,13 @@ export function ProfileStep({ profile, onChange }: ProfileStepProps) {
               </label>
             ))}
           </div>
+        </fieldset>
+        <fieldset className="preference-fieldset">
+          <legend>Playback languages &amp; subtitles</legend>
+          <PlaybackLanguageFields
+            value={profile.playback}
+            onChange={(playback) => onChange({ ...profile, playback })}
+          />
         </fieldset>
       </div>
     </div>

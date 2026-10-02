@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { ViewerProfile } from "@streamer-ai/contracts";
 import { apiClient, type ProfileDraft, type StreamerApi } from "./api/client";
 import { AppShell } from "./components/AppShell";
+import { Brand } from "./components/Brand";
+import { ProfileChooser } from "./components/ProfileChooser";
 import { Onboarding } from "./components/onboarding/Onboarding";
+import { safeErrorMessage } from "./api/client";
 
 export interface AppProps {
   api?: StreamerApi;
@@ -12,8 +16,29 @@ export function App({ api = apiClient, forceOnboarding = false }: AppProps) {
   const [setupState, setSetupState] = useState<
     "loading" | "required" | "complete"
   >(forceOnboarding ? "required" : "loading");
-  const [viewerName, setViewerName] = useState("Viewer");
   const [playbackEnabled, setPlaybackEnabled] = useState(false);
+  const [profiles, setProfiles] = useState<ViewerProfile[]>([]);
+  const [profilesLoading, setProfilesLoading] = useState(true);
+  const [activeProfile, setActiveProfile] = useState<ViewerProfile | null>(
+    null,
+  );
+  const [rerunProfile, setRerunProfile] = useState<ViewerProfile | null>(null);
+  const [profilesError, setProfilesError] = useState("");
+
+  const loadProfiles = useCallback(async () => {
+    setProfilesLoading(true);
+    try {
+      const response = await api.getProfiles();
+      setProfiles(response.items);
+      setProfilesError("");
+      return response.items;
+    } catch (error) {
+      setProfilesError(safeErrorMessage(error));
+      return null;
+    } finally {
+      setProfilesLoading(false);
+    }
+  }, [api]);
 
   useEffect(() => {
     if (forceOnboarding) return;
@@ -22,9 +47,12 @@ export function App({ api = apiClient, forceOnboarding = false }: AppProps) {
       .getSetupStatus()
       .then((status) => {
         if (!active) return;
-        setViewerName(status.profile?.name.trim() || "Viewer");
         setPlaybackEnabled(status.playback);
         setSetupState(status.complete ? "complete" : "required");
+        if (status.complete)
+          void loadProfiles().then((items) => {
+            if (active && items?.length === 0) setSetupState("required");
+          });
       })
       .catch(() => {
         // The server is the only setup authority. If it cannot be reached,
@@ -34,11 +62,21 @@ export function App({ api = apiClient, forceOnboarding = false }: AppProps) {
     return () => {
       active = false;
     };
-  }, [api, forceOnboarding]);
+  }, [api, forceOnboarding, loadProfiles]);
 
-  const completeOnboarding = (profile: ProfileDraft) => {
-    setViewerName(profile.name.trim() || "Viewer");
+  const completeOnboarding = (_profile: ProfileDraft) => {
+    const selectedId = rerunProfile?.id;
     setSetupState("complete");
+    setRerunProfile(null);
+    void api
+      .getSetupStatus()
+      .then((status) => setPlaybackEnabled(status.playback))
+      .catch(() => undefined);
+    void loadProfiles().then((items) => {
+      if (selectedId) {
+        setActiveProfile(items?.find((item) => item.id === selectedId) ?? null);
+      }
+    });
   };
 
   if (setupState === "loading") {
@@ -50,17 +88,67 @@ export function App({ api = apiClient, forceOnboarding = false }: AppProps) {
     );
   }
 
-  return setupState === "complete" ? (
+  if (setupState !== "complete" || rerunProfile) {
+    return (
+      <Onboarding
+        key={rerunProfile?.id ?? "initial"}
+        api={api}
+        existingProfile={rerunProfile ?? undefined}
+        onCancel={rerunProfile ? () => setRerunProfile(null) : undefined}
+        onComplete={completeOnboarding}
+      />
+    );
+  }
+
+  if (!activeProfile) {
+    if (profilesLoading)
+      return (
+        <main className="startup-status" aria-live="polite" aria-busy="true">
+          <Brand className="brand--loading" />
+          <p>Loading profiles…</p>
+        </main>
+      );
+    return (
+      <ProfileChooser
+        profiles={profiles}
+        error={profilesError}
+        onRetry={() => {
+          void loadProfiles();
+        }}
+        onSelect={(profile) => {
+          if (profile.onboardingComplete) setActiveProfile(profile);
+          else setRerunProfile(profile);
+        }}
+        onCreate={async (name) => {
+          const created = await api.createProfile({ name, locale: "en" });
+          setProfiles((current) => [...current, created]);
+          setRerunProfile(created);
+        }}
+      />
+    );
+  }
+
+  return (
     <AppShell
+      key={activeProfile.id}
       api={api}
-      viewerName={viewerName}
+      profile={activeProfile}
+      onProfileUpdated={(updated) => {
+        setActiveProfile(updated);
+        setProfiles((current) =>
+          current.map((item) => (item.id === updated.id ? updated : item)),
+        );
+      }}
+      onSwitchAccount={() => {
+        setActiveProfile(null);
+        window.history.pushState({}, "", "/");
+      }}
+      onRerunOnboarding={() => setRerunProfile(activeProfile)}
       playbackEnabled={playbackEnabled}
     />
-  ) : (
-    <Onboarding api={api} onComplete={completeOnboarding} />
   );
 }
 
 function BrandLoading() {
-  return <span className="startup-status__mark">StreamerAI</span>;
+  return <Brand className="brand--loading" />;
 }

@@ -83,11 +83,74 @@ export type IntegrationConnectionResult = z.infer<
   typeof IntegrationConnectionResultSchema
 >;
 
+export const MediaLanguageSchema = z.enum([
+  "cs",
+  "en",
+  "sk",
+  "de",
+  "fr",
+  "es",
+  "it",
+  "pl",
+  "ja",
+]);
+export type MediaLanguage = z.infer<typeof MediaLanguageSchema>;
+
+export const PlaybackPreferencesSchema = z
+  .object({
+    primaryAudioLanguage: MediaLanguageSchema.default("cs"),
+    secondaryAudioLanguage: MediaLanguageSchema.default("en"),
+    autoFindSubtitles: z.boolean().default(false),
+    primaryAudioSubtitleLanguage: z
+      .union([z.literal("off"), MediaLanguageSchema])
+      .default("off"),
+    secondaryAudioSubtitleLanguage: z
+      .union([z.literal("off"), MediaLanguageSchema])
+      .default("cs"),
+  })
+  .strict();
+export type PlaybackPreferences = z.infer<typeof PlaybackPreferencesSchema>;
+
+export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences =
+  PlaybackPreferencesSchema.parse({});
+
+export const ViewerProfileSchema = z
+  .object({
+    id: z.string().min(1).max(120),
+    name: z.string().min(1).max(80),
+    onboardingComplete: z.boolean(),
+    locale: SupportedLocaleSchema,
+    genres: z.array(z.string().min(1).max(80)).max(50),
+    prompt: z.string().max(3000),
+    playback: PlaybackPreferencesSchema,
+  })
+  .strict();
+export type ViewerProfile = z.infer<typeof ViewerProfileSchema>;
+
+export const CreateViewerProfileSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    locale: SupportedLocaleSchema.default("en"),
+  })
+  .strict();
+
+export const UpdateViewerProfileSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    locale: SupportedLocaleSchema.optional(),
+    genres: z.array(z.string().trim().min(1).max(80)).max(50).optional(),
+    prompt: z.string().trim().max(3000).optional(),
+    playback: PlaybackPreferencesSchema.optional(),
+  })
+  .strict();
+export type UpdateViewerProfile = z.infer<typeof UpdateViewerProfileSchema>;
+
 export const SetupProfileSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
     locale: SupportedLocaleSchema,
     preferences: z.array(z.string().trim().min(1).max(80)).max(50).default([]),
+    playback: PlaybackPreferencesSchema.default(DEFAULT_PLAYBACK_PREFERENCES),
   })
   .strict();
 
@@ -97,6 +160,7 @@ export const CompleteSetupRequestSchema = z
   .object({
     profile: SetupProfileSchema,
     localAiEnabled: z.boolean(),
+    profileId: z.string().min(1).max(120).optional(),
   })
   .strict();
 

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import type { ViewerProfile } from "@streamer-ai/contracts";
 import type {
   ConnectionState,
   ProfileDraft,
   StreamerApi,
 } from "../../api/client";
 import { safeErrorMessage } from "../../api/client";
+import { DEFAULT_PLAYBACK_PREFERENCES } from "../../playback-preferences";
 import { Brand } from "../Brand";
 import { ConnectionsStep } from "./ConnectionsStep";
 import { FinishStep } from "./FinishStep";
@@ -23,14 +25,22 @@ const steps = [
 interface OnboardingProps {
   api: StreamerApi;
   onComplete: (profile: ProfileDraft) => void;
+  existingProfile?: ViewerProfile;
+  onCancel?: () => void;
 }
 
-export function Onboarding({ api, onComplete }: OnboardingProps) {
+export function Onboarding({
+  api,
+  onComplete,
+  existingProfile,
+  onCancel,
+}: OnboardingProps) {
   const [step, setStep] = useState(0);
   const [profile, setProfile] = useState<ProfileDraft>({
-    name: "",
-    locale: "en",
-    preferences: [],
+    name: existingProfile?.name ?? "",
+    locale: existingProfile?.locale ?? "en",
+    preferences: existingProfile?.genres ?? [],
+    playback: existingProfile?.playback ?? DEFAULT_PLAYBACK_PREFERENCES,
   });
   const [tmdbState, setTmdbState] = useState<ConnectionState>("not-configured");
   const [webshareState, setWebshareState] =
@@ -77,6 +87,7 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
       await api.completeSetup({
         profile: { ...profile, name: profile.name.trim() || "Viewer" },
         localAiEnabled,
+        ...(existingProfile ? { profileId: existingProfile.id } : {}),
       });
       onComplete(profile);
     } catch (error) {
@@ -92,14 +103,20 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
     <div className="onboarding-shell">
       <header className="onboarding-header">
         <Brand />
-        <button
-          className="text-button"
-          type="button"
-          onClick={() => setStep(4)}
-          disabled={step === 4}
-        >
-          Finish later
-        </button>
+        {onCancel ? (
+          <button className="text-button" type="button" onClick={onCancel}>
+            Exit setup
+          </button>
+        ) : (
+          <button
+            className="text-button"
+            type="button"
+            onClick={() => setStep(4)}
+            disabled={step === 4}
+          >
+            Finish later
+          </button>
+        )}
       </header>
 
       <div className="onboarding-layout">

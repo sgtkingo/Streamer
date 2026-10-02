@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <rect width="512" height="512" rx="72" fill="#000"/>
-  <path fill="#e50914" d="M134 100h80l164 312h-80z"/>
-  <path fill="#fff" d="M134 100h80v312h-80zm164 0h80v312h-80z"/>
+  <text x="58" y="344" fill="#e50914" font-family="Arial, Helvetica, sans-serif" font-size="248" font-weight="900">S</text>
+  <text x="204" y="344" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="248" font-weight="900">AI</text>
 </svg>

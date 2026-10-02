@@ -63,6 +63,9 @@ or closed `sessionId` returns `DISCOVERY_SESSION_NOT_FOUND`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/profiles` | List up to five viewer profiles with non-secret playback and taste preferences, including `onboardingComplete`. |
+| `POST` | `/profiles` | Create an incomplete viewer profile from `{ "name": "Alex", "locale": "cs" }`; returns `409 PROFILE_LIMIT_REACHED` after five. |
+| `PATCH` | `/profiles/:profileId` | Update display name, interface locale, genre list, taste prompt or playback preferences. |
 | `GET` | `/profiles/:profileId/library` | List the profile Library. |
 | `PUT` | `/profiles/:profileId/library/:titleId` | Explicitly save a validated title. |
 | `DELETE` | `/profiles/:profileId/library/:titleId` | Remove Library membership. |

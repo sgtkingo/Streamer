@@ -3,9 +3,15 @@ import type {
   CatalogTitle,
   PlaybackGrant,
   PlaybackMediaInfo,
+  PlaybackPreferences,
 } from "@streamer-ai/contracts";
 import type { StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
+import {
+  preferredAudioTrack,
+  preferredEmbeddedSubtitle,
+} from "../playback-preferences";
+import { Brand } from "./Brand";
 import { subtitleFileToVtt } from "./subtitle-file";
 
 interface LocalSubtitle {
@@ -18,6 +24,7 @@ interface VideoPlayerProps {
   api: StreamerApi;
   title: CatalogTitle;
   grant: PlaybackGrant;
+  preferences: PlaybackPreferences;
   onClose: () => void;
 }
 
@@ -42,7 +49,13 @@ function channelLabel(channels: number, layout: string | null): string {
   return `${channels} channels`;
 }
 
-export function VideoPlayer({ api, title, grant, onClose }: VideoPlayerProps) {
+export function VideoPlayer({
+  api,
+  title,
+  grant,
+  preferences,
+  onClose,
+}: VideoPlayerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -94,8 +107,12 @@ export function VideoPlayer({ api, title, grant, onClose }: VideoPlayerProps) {
           savedPercent < 95
             ? (manifest.durationSeconds * savedPercent) / 100
             : 0;
+        const audio = preferredAudioTrack(manifest, preferences);
         setInfo(manifest);
-        setSelectedAudio(manifest.audioTracks[0]?.streamIndex ?? null);
+        setSelectedAudio(audio?.streamIndex ?? null);
+        setSelectedSubtitle(
+          preferredEmbeddedSubtitle(manifest, preferences, audio),
+        );
         setSourceStart(resumeAt);
         setPosition(resumeAt);
         progressRef.current = resumeAt > 0 ? savedPercent : 0;
@@ -119,7 +136,7 @@ export function VideoPlayer({ api, title, grant, onClose }: VideoPlayerProps) {
           );
       }, 0);
     };
-  }, [api, grant.grantId, title.progressPercent]);
+  }, [api, grant.grantId, preferences, title.progressPercent]);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -416,9 +433,7 @@ export function VideoPlayer({ api, title, grant, onClose }: VideoPlayerProps) {
         )}
         <div className="video-player__top">
           <div>
-            <span className="video-player__brand">
-              STREAMER<span>AI</span>
-            </span>
+            <Brand className="brand--player" />
             <p className="video-player__eyebrow">Now playing</p>
             <h2>{title.title}</h2>
             {title.year && <small>{title.year}</small>}
@@ -594,6 +609,14 @@ export function VideoPlayer({ api, title, grant, onClose }: VideoPlayerProps) {
                         }
                         onClick={() => {
                           restartAt(position, track.streamIndex);
+                          if (preferences.autoFindSubtitles)
+                            setSelectedSubtitle(
+                              preferredEmbeddedSubtitle(
+                                info,
+                                preferences,
+                                track,
+                              ),
+                            );
                           setMenu(null);
                         }}
                       >

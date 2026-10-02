@@ -5,6 +5,11 @@ import {
   HistoryResponseSchema,
   LibraryResponseSchema,
   PlaybackGrantSchema,
+  PlaybackPreferencesSchema,
+  ViewerProfileSchema,
+  type PlaybackPreferences,
+  type UpdateViewerProfile,
+  type ViewerProfile,
   type CatalogTitle,
   type DiscoveryRequest,
   type DiscoveryResponse,
@@ -13,7 +18,11 @@ import {
   type LibraryResponse,
   type PlaybackGrant,
 } from "@streamer-ai/contracts";
-import type { StreamerDatabase } from "@streamer-ai/database";
+import {
+  ProfileLimitError,
+  type Profile,
+  type StreamerDatabase,
+} from "@streamer-ai/database";
 import { createHash, randomUUID } from "node:crypto";
 import {
   PreviewContentProvider,
@@ -77,10 +86,16 @@ export class StreamerCore {
     name: string;
     locale: "en" | "cs" | "de";
     preferences: string[];
+    playback: PlaybackPreferences;
     localAiEnabled: boolean;
   }): void {
     const existing = this.database.profiles.get(input.id);
-    const preferences = { genres: input.preferences };
+    const preferences = {
+      ...existing?.preferences,
+      genres: input.preferences,
+      playback: input.playback,
+      onboardingComplete: true,
+    };
     if (existing === null) {
       this.database.profiles.create({ ...input, preferences });
     } else {
@@ -92,6 +107,80 @@ export class StreamerCore {
     }
     this.database.settings.set("setup.completed", true);
     this.database.settings.set("setup.localAiEnabled", input.localAiEnabled);
+  }
+
+  private publicProfile(profile: Profile): ViewerProfile {
+    const playback = PlaybackPreferencesSchema.safeParse(
+      profile.preferences.playback,
+    );
+    return ViewerProfileSchema.parse({
+      id: profile.id,
+      name: profile.name,
+      onboardingComplete:
+        profile.preferences.onboardingComplete === true ||
+        (profile.id === "default" &&
+          profile.preferences.onboardingComplete !== false &&
+          this.database.settings.get<boolean>("setup.completed") === true),
+      locale: profile.locale,
+      genres: Array.isArray(profile.preferences.genres)
+        ? profile.preferences.genres.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : [],
+      prompt:
+        typeof profile.preferences.prompt === "string"
+          ? profile.preferences.prompt
+          : "",
+      playback: playback.success
+        ? playback.data
+        : PlaybackPreferencesSchema.parse({}),
+    });
+  }
+
+  listProfiles(): ViewerProfile[] {
+    return this.database.profiles
+      .list()
+      .map((profile) => this.publicProfile(profile));
+  }
+
+  createViewerProfile(input: {
+    name: string;
+    locale: "en" | "cs" | "de";
+  }): ViewerProfile {
+    if (this.database.profiles.count() >= 5) throw new ProfileLimitError();
+    const profile = this.database.profiles.create({
+      id: `profile-${randomUUID()}`,
+      name: input.name,
+      locale: input.locale,
+      preferences: {
+        genres: [],
+        prompt: "",
+        playback: PlaybackPreferencesSchema.parse({}),
+        onboardingComplete: false,
+      },
+    });
+    return this.publicProfile(profile);
+  }
+
+  updateViewerProfile(
+    profileId: string,
+    patch: UpdateViewerProfile,
+  ): ViewerProfile {
+    const current = this.database.profiles.get(profileId);
+    if (!current) throw new UnknownProfileError(profileId);
+    const preferences = {
+      ...current.preferences,
+      ...(patch.genres === undefined ? {} : { genres: patch.genres }),
+      ...(patch.prompt === undefined ? {} : { prompt: patch.prompt }),
+      ...(patch.playback === undefined ? {} : { playback: patch.playback }),
+    };
+    return this.publicProfile(
+      this.database.profiles.update(profileId, {
+        name: patch.name,
+        locale: patch.locale,
+        preferences,
+      }),
+    );
   }
 
   home(profileId: string): HomeFeed {

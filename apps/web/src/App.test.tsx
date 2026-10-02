@@ -4,6 +4,7 @@ import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { StreamerApi } from "./api/client";
+import { DEFAULT_PLAYBACK_PREFERENCES } from "./playback-preferences";
 
 function createApi(): StreamerApi {
   return {
@@ -35,6 +36,39 @@ function createApi(): StreamerApi {
       model: "qwen3.5:4b",
     }),
     completeSetup: vi.fn().mockResolvedValue(undefined),
+    getProfiles: vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: "default",
+          name: "Alex",
+          onboardingComplete: true,
+          locale: "en",
+          genres: ["Sci-fi"],
+          prompt: "",
+          playback: DEFAULT_PLAYBACK_PREFERENCES,
+        },
+      ],
+      limit: 5,
+    }),
+    createProfile: vi.fn().mockResolvedValue({
+      id: "profile-2",
+      name: "Guest",
+      onboardingComplete: false,
+      locale: "en",
+      genres: [],
+      prompt: "",
+      playback: DEFAULT_PLAYBACK_PREFERENCES,
+    }),
+    updateProfile: vi.fn().mockImplementation(async (_profileId, patch) => ({
+      id: "default",
+      name: "Alex",
+      onboardingComplete: true,
+      locale: "en",
+      genres: ["Sci-fi"],
+      prompt: "",
+      playback: DEFAULT_PLAYBACK_PREFERENCES,
+      ...patch,
+    })),
     getHome: vi.fn().mockResolvedValue({
       profileId: "default",
       mode: "preview",
@@ -103,6 +137,34 @@ function createApi(): StreamerApi {
 }
 
 describe("onboarding", () => {
+  it("opens setup directly for the first viewer", async () => {
+    const api = createApi();
+    vi.mocked(api.getSetupStatus).mockResolvedValue({
+      complete: false,
+      tmdb: "not-configured",
+      webshare: "not-configured",
+      localAi: "not-configured",
+      playback: false,
+    });
+    render(<App api={api} />);
+    expect(
+      await screen.findByRole("heading", { name: /your cinema/i }),
+    ).toBeInTheDocument();
+    expect(api.getProfiles).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: /who's watching/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens setup if a completed installation has no viewer profiles", async () => {
+    const api = createApi();
+    vi.mocked(api.getProfiles).mockResolvedValue({ items: [], limit: 5 });
+    render(<App api={api} />);
+    expect(
+      await screen.findByRole("heading", { name: /your cinema/i }),
+    ).toBeInTheDocument();
+  });
+
   it("guides a viewer through all five steps and opens the library", async () => {
     const user = userEvent.setup();
     const api = createApi();
@@ -115,6 +177,14 @@ describe("onboarding", () => {
 
     await user.type(screen.getByLabelText(/display name/i), "Alex");
     await user.click(screen.getByLabelText("Sci-fi"));
+    expect(screen.getByLabelText("Primary audio language")).toHaveValue("cs");
+    expect(screen.getByLabelText("Secondary audio language")).toHaveValue("en");
+    expect(screen.getByLabelText("Subtitles with primary audio")).toHaveValue(
+      "off",
+    );
+    expect(screen.getByLabelText("Subtitles with secondary audio")).toHaveValue(
+      "cs",
+    );
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     expect(
@@ -134,6 +204,8 @@ describe("onboarding", () => {
       screen.getByRole("heading", { name: /welcome home, alex/i }),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /enter streamer/i }));
+
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
 
     expect(
       await screen.findByRole("heading", {
@@ -237,6 +309,149 @@ describe("onboarding", () => {
   });
 });
 
+describe("profile navigation", () => {
+  it("opens profile pages, saves playback languages, and returns to the profile chooser", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.click(
+      screen.getByRole("button", { name: /profile menu for alex/i }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    expect(
+      screen.getByRole("heading", { name: "Settings" }),
+    ).toBeInTheDocument();
+    await user.selectOptions(
+      screen.getByLabelText("Secondary audio language"),
+      "de",
+    );
+    await user.click(screen.getByLabelText("Automatically find subtitles"));
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+    await waitFor(() =>
+      expect(api.updateProfile).toHaveBeenCalledWith(
+        "default",
+        expect.objectContaining({
+          playback: expect.objectContaining({
+            secondaryAudioLanguage: "de",
+            autoFindSubtitles: true,
+          }),
+        }),
+      ),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /profile menu for alex/i }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Preferences" }));
+    await user.type(
+      screen.getByLabelText("Your taste prompt"),
+      "Quiet autumn mysteries.",
+    );
+    await user.click(screen.getByRole("button", { name: "Save preferences" }));
+    await waitFor(() =>
+      expect(api.updateProfile).toHaveBeenCalledWith(
+        "default",
+        expect.objectContaining({ prompt: "Quiet autumn mysteries." }),
+      ),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /profile menu for alex/i }),
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: /log out \/ switch profile/i }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: /who's watching/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("creates a second viewer from one of five profile medallions", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    const primary = (await api.getProfiles()).items[0]!;
+    const guest = await api.createProfile({ name: "Guest", locale: "en" });
+    vi.mocked(api.createProfile).mockClear();
+    let created = false;
+    let completed = false;
+    vi.mocked(api.createProfile).mockImplementation(async () => {
+      created = true;
+      return guest;
+    });
+    vi.mocked(api.getProfiles).mockImplementation(async () => ({
+      items: created
+        ? [primary, { ...guest, onboardingComplete: completed }]
+        : [primary],
+      limit: 5,
+    }));
+    vi.mocked(api.completeSetup).mockImplementation(async (request) => {
+      if (request.profileId === guest.id) completed = true;
+    });
+    render(<App api={api} />);
+    await user.click(
+      await screen.findByRole("button", { name: /add profile/i }),
+    );
+    await user.type(screen.getByLabelText("Profile name"), "Guest");
+    await user.click(screen.getByRole("button", { name: "Create profile" }));
+    await waitFor(() =>
+      expect(api.createProfile).toHaveBeenCalledWith({
+        name: "Guest",
+        locale: "en",
+      }),
+    );
+    expect(
+      await screen.findByRole("button", { name: /start setup/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /profile menu for guest/i }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Exit setup" }));
+    await user.click(
+      await screen.findByRole("button", { name: /guest.*finish setup/i }),
+    );
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    expect(screen.getByLabelText("Display name")).toHaveValue("Guest");
+    await user.click(screen.getByRole("button", { name: /^continue/i }));
+    await user.click(screen.getByRole("button", { name: /^continue/i }));
+    await user.click(screen.getByRole("button", { name: /^continue/i }));
+    await user.click(screen.getByRole("button", { name: /enter streamer/i }));
+    await waitFor(() =>
+      expect(api.completeSetup).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: guest.id }),
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: /profile menu for guest/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("reopens onboarding for the selected profile", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.click(
+      screen.getByRole("button", { name: /profile menu for alex/i }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    await user.click(
+      screen.getByRole("button", { name: "Run onboarding again" }),
+    );
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    expect(screen.getByLabelText("Display name")).toHaveValue("Alex");
+    expect(screen.getByLabelText("Primary audio language")).toHaveValue("cs");
+    await user.click(screen.getByRole("button", { name: /^continue/i }));
+    await user.click(screen.getByRole("button", { name: /^continue/i }));
+    await user.click(screen.getByRole("button", { name: /^continue/i }));
+    await user.click(screen.getByRole("button", { name: /enter streamer/i }));
+    await waitFor(() =>
+      expect(api.completeSetup).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "default" }),
+      ),
+    );
+  });
+});
+
 describe("conversational Home", () => {
   const title = {
     id: "sai:title:lake-house",
@@ -303,6 +518,8 @@ describe("conversational Home", () => {
     window.history.replaceState({}, "", "/");
     render(<App api={api} />);
 
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+
     await user.type(
       await screen.findByLabelText(/ask streamerai/i),
       "an autumn movie with Sandra Bullock",
@@ -354,6 +571,8 @@ describe("conversational Home", () => {
       </StrictMode>,
     );
 
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+
     await user.type(
       await screen.findByLabelText(/ask streamerai/i),
       "a warm romantic movie",
@@ -372,6 +591,16 @@ describe("conversational Home", () => {
     expect(
       await screen.findByRole("dialog", { name: /playing the lake house/i }),
     ).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("button", { name: "StreamerAI home" }),
+      ).getByLabelText("StreamerAI"),
+    ).toHaveTextContent("STREAMERAI");
+    expect(
+      within(
+        screen.getByRole("dialog", { name: /playing the lake house/i }),
+      ).getByLabelText("StreamerAI"),
+    ).toHaveTextContent("STREAMERAI");
     expect(api.getPlaybackManifest).toHaveBeenCalledWith("grant-1");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(api.closePlayback).not.toHaveBeenCalled();
