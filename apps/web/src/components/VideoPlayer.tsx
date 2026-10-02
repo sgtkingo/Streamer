@@ -58,6 +58,18 @@ function channelLabel(channels: number, layout: string | null): string {
   return `${channels} channels`;
 }
 
+function PauseIcon({ size }: { size: "overlay" | "control" }) {
+  return (
+    <span
+      className={`video-player__pause-icon video-player__pause-icon--${size}`}
+      aria-hidden="true"
+    >
+      <span />
+      <span />
+    </span>
+  );
+}
+
 export function VideoPlayer({
   api,
   profileId,
@@ -101,6 +113,7 @@ export function VideoPlayer({
   const [thumbnailAt, setThumbnailAt] = useState(0);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [hasEnded, setHasEnded] = useState(false);
   const [needsClick, setNeedsClick] = useState(false);
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
@@ -434,6 +447,13 @@ export function VideoPlayer({
   const shownPosition = scrubPosition ?? position;
   const progress =
     duration > 0 ? Math.min(100, (shownPosition / duration) * 100) : 0;
+  const isPaused =
+    startedRef.current &&
+    !playing &&
+    !hasEnded &&
+    !resumePrompt &&
+    !episodeSwitching &&
+    !playbackError;
   const mediaUrl = useMemo(() => {
     if (!info) return "";
     const parameters = new URLSearchParams({ start: sourceStart.toFixed(3) });
@@ -537,7 +557,7 @@ export function VideoPlayer({
           <video
             key={`${sourceVersion}:${selectedAudio ?? "silent"}`}
             ref={videoRef}
-            className="video-player__video"
+            className={`video-player__video${isPaused ? " is-paused" : ""}`}
             src={mediaUrl}
             poster={title.backdropUrl ?? title.posterUrl ?? undefined}
             playsInline
@@ -552,6 +572,7 @@ export function VideoPlayer({
             }}
             onPlay={() => {
               startedRef.current = true;
+              setHasEnded(false);
               setPlaying(true);
             }}
             onPause={() => {
@@ -591,6 +612,7 @@ export function VideoPlayer({
             }}
             onEnded={() => {
               setPlaying(false);
+              setHasEnded(true);
               if (duration > 0) setPosition(duration);
               progressRef.current = 100;
               setNextEpisodeCountdown(nextEpisode ? 5 : null);
@@ -760,15 +782,10 @@ export function VideoPlayer({
             </section>
           </div>
         )}
-        {info && !resumePrompt && !playing && !playbackError && (
-          <button
-            type="button"
-            className="video-player__center-play"
-            onClick={togglePlayback}
-            aria-label={needsClick ? "Start playback" : "Play video"}
-          >
-            ▶
-          </button>
+        {isPaused && (
+          <div className="video-player__paused-indicator" aria-hidden="true">
+            <PauseIcon size="overlay" />
+          </div>
         )}
 
         {info && (
@@ -872,14 +889,6 @@ export function VideoPlayer({
                   </button>
                 </>
               )}
-              <button
-                type="button"
-                className="video-player__icon-button"
-                onClick={togglePlayback}
-                aria-label={playing ? "Pause" : "Play"}
-              >
-                {playing ? "Ⅱ" : "▶"}
-              </button>
               <span className="video-player__time">
                 {formatTime(shownPosition)}{" "}
                 <span>/ {duration > 0 ? formatTime(duration) : "—"}</span>
@@ -887,11 +896,49 @@ export function VideoPlayer({
               <div className="video-player__spacer" />
               <button
                 type="button"
+                className="video-player__icon-button video-player__play-toggle"
+                onClick={togglePlayback}
+                aria-label={playing ? "Pause" : "Play"}
+              >
+                {playing ? <PauseIcon size="control" /> : "▶"}
+              </button>
+              <button
+                type="button"
                 className="video-player__icon-button"
-                onClick={() => setMuted((value) => !value)}
+                onClick={() => {
+                  if (muted || volume === 0) {
+                    setMuted(false);
+                    if (volume === 0) setVolume(0.5);
+                  } else {
+                    setMuted(true);
+                  }
+                }}
                 aria-label={muted || volume === 0 ? "Unmute" : "Mute"}
               >
-                {muted || volume === 0 ? "◖" : "◖))"}
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  className="video-player__volume-icon"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M3.5 9v6H8l5 4V5L8 9H3.5Z" />
+                  {!muted && volume > 0 && (
+                    <path d="M16 9.2a4.2 4.2 0 0 1 0 5.6" />
+                  )}
+                  {!muted && volume >= 0.5 && (
+                    <path d="M18.7 6.6a8 8 0 0 1 0 10.8" />
+                  )}
+                  {(muted || volume === 0) && (
+                    <path
+                      className="video-player__volume-mute-mark"
+                      d="m16.2 9.2 5.1 5.6m0-5.6-5.1 5.6"
+                    />
+                  )}
+                </svg>
               </button>
               <input
                 className="video-player__volume"

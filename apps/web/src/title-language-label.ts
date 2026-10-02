@@ -78,18 +78,28 @@ function uniqueLanguages(values: readonly string[]): string[] {
   ];
 }
 
+export interface TitleLanguageBadge {
+  label: string;
+  priority: "primary" | "secondary" | "other";
+  warning: boolean;
+}
+
 export interface TitleLanguageLabel {
   text: string;
   warning: boolean;
 }
 
+interface DetailedTitleLanguageLabel extends TitleLanguageLabel {
+  badges: TitleLanguageBadge[];
+}
+
 /** Shows verified tracks when present, otherwise the languages attached to catalogue formats. */
-export function titleLanguageLabel(
+function titleLanguageDetails(
   title: CatalogTitle,
   preferences: PlaybackPreferences,
   checked?: Languages,
   showMissingSubtitleWarning = true,
-): TitleLanguageLabel | null {
+): DetailedTitleLanguageLabel | null {
   const formats = title.formats;
   const audio = uniqueLanguages(
     checked
@@ -108,6 +118,33 @@ export function titleLanguageLabel(
   const matches = preferred.filter((language) => audio.includes(language));
   const shown = matches.length > 0 ? matches : audio.slice(0, 3);
   let warning = false;
+  const badges = shown.map((language) => {
+    const label = labels[language] ?? language.toUpperCase();
+    const hasSubtitles = checked
+      ? checked.subtitleLanguages.length > 0
+      : formats.some(
+          (format) =>
+            uniqueLanguages(format.audioLanguages).includes(language) &&
+            format.subtitleLanguages.length > 0,
+        );
+    const missingPreferredSubtitles =
+      language !== primary &&
+      !preferred.includes(language) &&
+      !hasSubtitles &&
+      showMissingSubtitleWarning;
+    if (missingPreferredSubtitles) warning = true;
+    return {
+      label:
+        language !== primary && hasSubtitles ? `${label} (sub)` : label,
+      priority:
+        language === primary
+          ? ("primary" as const)
+          : language === secondary
+            ? ("secondary" as const)
+            : ("other" as const),
+      warning: missingPreferredSubtitles,
+    };
+  });
   const text = shown
     .map((language) => {
       const label = labels[language] ?? language.toUpperCase();
@@ -127,5 +164,36 @@ export function titleLanguageLabel(
       return label;
     })
     .join(", ");
-  return { text, warning };
+  return { text, warning, badges };
+}
+
+export function titleLanguageLabel(
+  title: CatalogTitle,
+  preferences: PlaybackPreferences,
+  checked?: Languages,
+  showMissingSubtitleWarning = true,
+): TitleLanguageLabel | null {
+  const details = titleLanguageDetails(
+    title,
+    preferences,
+    checked,
+    showMissingSubtitleWarning,
+  );
+  return details ? { text: details.text, warning: details.warning } : null;
+}
+
+export function titleLanguageBadges(
+  title: CatalogTitle,
+  preferences: PlaybackPreferences,
+  checked?: Languages,
+  showMissingSubtitleWarning = true,
+): TitleLanguageBadge[] | null {
+  return (
+    titleLanguageDetails(
+      title,
+      preferences,
+      checked,
+      showMissingSubtitleWarning,
+    )?.badges ?? null
+  );
 }

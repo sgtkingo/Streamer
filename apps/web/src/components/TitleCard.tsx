@@ -1,7 +1,10 @@
 import { useEffect, useMemo } from "react";
 import type { CatalogTitle, PlaybackPreferences } from "@streamer-ai/contracts";
 import type { EpisodeSelection } from "@streamer-ai/contracts";
-import { titleLanguageLabel } from "../title-language-label";
+import {
+  titleLanguageBadges,
+  titleLanguageLabel,
+} from "../title-language-label";
 import type { PlaybackCheckState } from "./usePlaybackChecks";
 
 interface TitleCardProps {
@@ -76,6 +79,15 @@ export function TitleCard({
   const languageLabel =
     !playbackEnabled || checkStatus === "ready"
       ? titleLanguageLabel(
+          item,
+          preferences,
+          checkedLanguages,
+          !playbackEnabled || checkedLanguages !== undefined,
+        )
+      : null;
+  const languageBadges =
+    !playbackEnabled || checkStatus === "ready"
+      ? titleLanguageBadges(
           item,
           preferences,
           checkedLanguages,
@@ -225,10 +237,17 @@ export function TitleCard({
         </p>
         {languageLabel && (
           <p
-            className={`title-card__languages${languageLabel.warning ? " title-card__languages--warning" : ""}`}
-            aria-label={`Audio languages: ${languageLabel.text}${languageLabel.warning ? "; no preferred audio or subtitles" : ""}`}
+            className="title-card__languages"
+            aria-label={`Audio languages: ${languageBadges?.map((badge) => badge.label).join(", ") ?? languageLabel.text}${languageLabel.warning ? "; no preferred audio or subtitles" : ""}`}
           >
-            {languageLabel.text}
+            {languageBadges?.map((badge) => (
+              <span
+                className={`title-card__language-badge title-card__language-badge--${badge.priority}${badge.warning ? " title-card__language-badge--warning" : ""}`}
+                key={badge.label}
+              >
+                {badge.label}
+              </span>
+            ))}
           </p>
         )}
         {playbackEnabled &&
