@@ -204,12 +204,15 @@ export class WebshareClient {
     return token;
   }
 
-  async search(input: {
-    query: string;
-    limit?: number;
-    offset?: number;
-    sort?: "recent" | "rating" | "largest" | "smallest";
-  }): Promise<{ total: number | null; items: WebshareSearchItem[] }> {
+  async search(
+    input: {
+      query: string;
+      limit?: number;
+      offset?: number;
+      sort?: "recent" | "rating" | "largest" | "smallest";
+    },
+    signal?: AbortSignal,
+  ): Promise<{ total: number | null; items: WebshareSearchItem[] }> {
     const limit = input.limit ?? 20;
     const offset = input.offset ?? 0;
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
@@ -228,6 +231,8 @@ export class WebshareClient {
         category: "video",
       },
       false,
+      true,
+      signal,
     );
     return {
       total: integer(tag(xml, "total")),
@@ -250,11 +255,16 @@ export class WebshareClient {
     };
   }
 
-  async fileInfo(ident: string): Promise<WebshareFileInfo> {
+  async fileInfo(
+    ident: string,
+    signal?: AbortSignal,
+  ): Promise<WebshareFileInfo> {
     const xml = await this.post(
       "file_info",
       { ident, maybe_removed: "0" },
       true,
+      true,
+      signal,
     );
     const name = tag(xml, "name");
     if (name === null) {
@@ -329,6 +339,7 @@ export class WebshareClient {
     values: Readonly<Record<string, string>>,
     requireAuthentication: boolean,
     sendStoredCredential = true,
+    signal?: AbortSignal,
   ): Promise<string> {
     const token = sendStoredCredential
       ? await this.#secretStore.get(WEBSHARE_WST_SECRET_KEY)
@@ -338,7 +349,11 @@ export class WebshareClient {
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const requestSignal = signal
+      ? AbortSignal.any([controller.signal, signal])
+      : controller.signal;
     try {
+      requestSignal.throwIfAborted();
       const response = await this.#fetch(`${this.#baseUrl}/${endpoint}/`, {
         method: "POST",
         headers: {
@@ -349,7 +364,7 @@ export class WebshareClient {
           ...values,
           ...(token === undefined ? {} : { wst: token }),
         }).toString(),
-        signal: controller.signal,
+        signal: requestSignal,
       });
       if (!response.ok) {
         throw providerFailureForStatus("webshare", response.status);

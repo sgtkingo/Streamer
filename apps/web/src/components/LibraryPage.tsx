@@ -9,6 +9,7 @@ import type {
 } from "@streamer-ai/contracts";
 import type { PlaybackGrant, StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
+import { useToasts } from "./ToastProvider";
 import { TitleCard } from "./TitleCard";
 import { usePlaybackChecks } from "./usePlaybackChecks";
 
@@ -67,11 +68,32 @@ export function LibraryPage({
     useState<AvailabilityFilter>("all");
   const [genreFilter, setGenreFilter] = useState("all");
   const [yearFilter, setYearFilter] = useState("all");
+  const { showToast } = useToasts();
 
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   const historyDialogRef = useRef<HTMLElement>(null);
   const historyCloseRef = useRef<HTMLButtonElement>(null);
   const playbackChecks = usePlaybackChecks(api, profileId);
+
+  useEffect(() => {
+    if (libraryError) showToast(libraryError, "error");
+  }, [libraryError, showToast]);
+
+  useEffect(() => {
+    if (libraryNotice) {
+      showToast(libraryNotice, "success");
+    }
+  }, [libraryNotice, showToast]);
+
+  useEffect(() => {
+    if (historyError) showToast(historyError, "error");
+  }, [historyError, showToast]);
+
+  useEffect(() => {
+    if (historyNotice) {
+      showToast(historyNotice, "success");
+    }
+  }, [historyNotice, showToast]);
 
   const loadLibrary = useCallback(async () => {
     setLibraryLoading(true);
@@ -388,17 +410,6 @@ export function LibraryPage({
         </div>
       </section>
 
-      {libraryError && (
-        <p className="page-message page-message--error" role="alert">
-          {libraryError}
-        </p>
-      )}
-      {libraryNotice && (
-        <p className="page-message" role="status">
-          {libraryNotice}
-        </p>
-      )}
-
       {libraryLoading && !library ? (
         <section className="library-empty" aria-live="polite" aria-busy="true">
           <h2>Loading your Library…</h2>
@@ -494,6 +505,7 @@ export function LibraryPage({
               </div>
               <button
                 ref={historyCloseRef}
+                className="history-panel__close close-icon-button"
                 type="button"
                 aria-label="Close history"
                 onClick={() => setHistoryOpen(false)}
@@ -538,16 +550,6 @@ export function LibraryPage({
               </div>
             ) : null}
 
-            {historyError && (
-              <p className="page-message page-message--error" role="alert">
-                {historyError}
-              </p>
-            )}
-            {historyNotice && (
-              <p className="page-message" role="status">
-                {historyNotice}
-              </p>
-            )}
             {historyLoading && !history ? (
               <p className="empty-inline" role="status">
                 Loading Watch History…

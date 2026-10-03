@@ -169,7 +169,7 @@ export class WebshareMediaProvider implements MediaProvider {
 
   async search(
     rawRequest: MediaSearchRequest,
-    _context: ProviderContext,
+    context: ProviderContext,
   ): Promise<MediaCandidate[]> {
     const request = MediaSearchRequestSchema.parse(rawRequest);
     const episode =
@@ -181,7 +181,10 @@ export class WebshareMediaProvider implements MediaProvider {
     const query = `${request.originalTitle ?? request.title}${
       episode || request.year === null ? "" : ` ${request.year}`
     }${episode}`;
-    const result = await this.#client.search({ query, limit: request.limit });
+    const result = await this.#client.search(
+      { query, limit: request.limit },
+      context.signal,
+    );
     const retrievedAt = this.#now().toISOString();
     return result.items
       .filter((item) => !item.passwordProtected)
@@ -202,13 +205,16 @@ export class WebshareMediaProvider implements MediaProvider {
 
   async inspect(
     rawCandidate: MediaCandidateRef,
-    _context: ProviderContext,
+    context: ProviderContext,
   ): Promise<MediaVariant> {
     const candidate = MediaCandidateRefSchema.parse(rawCandidate);
     if (candidate.providerId !== "webshare") {
       throw new ProviderRequestError("webshare", "invalid-response", false);
     }
-    const file = await this.#client.fileInfo(candidate.candidateId);
+    const file = await this.#client.fileInfo(
+      candidate.candidateId,
+      context.signal,
+    );
     if (
       !file.downloadable ||
       file.passwordProtected ||

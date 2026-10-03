@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CompleteSetupRequestSchema,
+  DEFAULT_PLAYBACK_PREFERENCES,
   CatalogTitleSchema,
   DiscoveryResponseSchema,
   HealthResponseSchema,
@@ -93,7 +94,12 @@ describe("public contracts", () => {
         localAiEnabled: true,
       }),
     ).toEqual({
-      profile: { name: "Family", locale: "cs", preferences: ["Comedy"] },
+      profile: {
+        name: "Family",
+        locale: "cs",
+        preferences: ["Comedy"],
+        playback: DEFAULT_PLAYBACK_PREFERENCES,
+      },
       localAiEnabled: true,
     });
   });

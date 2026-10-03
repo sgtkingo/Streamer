@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   PlaybackPreferences,
   UpdateViewerProfile,
@@ -7,6 +7,7 @@ import type {
 import type { StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
 import { PlaybackLanguageFields } from "./PlaybackLanguageFields";
+import { useToasts } from "./ToastProvider";
 
 export type ProfilePage = "settings" | "preferences" | "account" | "statistics";
 
@@ -47,9 +48,60 @@ export function ProfilePages({
   const [selectedGenres, setSelectedGenres] = useState(profile.genres);
   const [prompt, setPrompt] = useState(profile.prompt);
   const [saving, setSaving] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+  const { showToast } = useToasts();
+
+  useEffect(() => {
+    if (notice) showToast(notice, "success");
+  }, [notice, showToast]);
+
+  useEffect(() => {
+    if (error) showToast(error, "error");
+  }, [error, showToast]);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (!deleteConfirmationOpen) return;
+
+    const dialog = deleteDialogRef.current;
+    const cancelButton = dialog?.querySelector<HTMLButtonElement>(
+      ".profile-delete-dialog__cancel",
+    );
+    cancelButton?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        if (deleting) return;
+        event.preventDefault();
+        setDeleteConfirmationOpen(false);
+        deleteButtonRef.current?.focus();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+
+      const buttons = Array.from(
+        dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+      );
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (!first || !last) return;
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [deleteConfirmationOpen, deleting]);
 
   const save = async (patch: UpdateViewerProfile) => {
     setSaving(true);
@@ -67,11 +119,6 @@ export function ProfilePages({
   };
 
   const forgetProfile = async () => {
-    const confirmed = window.confirm(
-      `Forget and delete ${profile.name}'s profile?\n\nThis permanently deletes the profile and its local data. This action cannot be undone. The profile medallion will be freed.`,
-    );
-    if (!confirmed) return;
-
     setDeleting(true);
     setError("");
     try {
@@ -97,17 +144,6 @@ export function ProfilePages({
               ? "My account"
               : "Statistics"}
       </h1>
-      {notice && (
-        <p className="page-message" role="status">
-          {notice}
-        </p>
-      )}
-      {error && (
-        <p className="page-message page-message--error" role="alert">
-          {error}
-        </p>
-      )}
-
       {page === "settings" && (
         <div className="profile-page__sections">
           <section className="profile-page__section" id="settings-language">
@@ -185,9 +221,10 @@ export function ProfilePages({
             </button>
             <button
               className="button button--logout"
+              ref={deleteButtonRef}
               type="button"
               disabled={deleting || saving}
-              onClick={() => void forgetProfile()}
+              onClick={() => setDeleteConfirmationOpen(true)}
             >
               {deleting ? "Deleting profile…" : "Forget and delete profile"}
             </button>
@@ -309,6 +346,56 @@ export function ProfilePages({
               </span>
             </div>
           </section>
+        </div>
+      )}
+
+      {deleteConfirmationOpen && page === "settings" && (
+        <div
+          className="profile-delete-backdrop"
+          onMouseDown={(event) => {
+            if (!deleting && event.target === event.currentTarget) {
+              setDeleteConfirmationOpen(false);
+              deleteButtonRef.current?.focus();
+            }
+          }}
+        >
+          <div
+            aria-describedby="profile-delete-description"
+            aria-labelledby="profile-delete-title"
+            aria-modal="true"
+            className="profile-delete-dialog"
+            ref={deleteDialogRef}
+            role="alertdialog"
+          >
+            <p className="eyebrow">Permanent action</p>
+            <h2 id="profile-delete-title">Forget and delete profile?</h2>
+            <p id="profile-delete-description">
+              This will permanently delete {profile.name}'s profile and its
+              local data, and free its profile medallion. This action cannot be
+              undone.
+            </p>
+            <div className="profile-delete-dialog__actions">
+              <button
+                className="button button--secondary profile-delete-dialog__cancel"
+                type="button"
+                disabled={deleting}
+                onClick={() => {
+                  setDeleteConfirmationOpen(false);
+                  deleteButtonRef.current?.focus();
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--logout"
+                type="button"
+                disabled={deleting}
+                onClick={() => void forgetProfile()}
+              >
+                {deleting ? "Deleting profile…" : "Forget and delete"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>

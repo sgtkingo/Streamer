@@ -6,6 +6,8 @@ import type {
 } from "@streamer-ai/contracts";
 import type { StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
+import { useToasts } from "./ToastProvider";
+import { playCardHoverTick } from "./TitleCard";
 
 interface Props {
   api: StreamerApi;
@@ -36,9 +38,14 @@ export function TitleDetail({
 }: Props) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState("");
+  const { showToast } = useToasts();
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+
+  useEffect(() => {
+    if (error) showToast(error, "error");
+  }, [error, showToast]);
   const [movieStatus, setMovieStatus] = useState<
     "checking" | "ready" | "unavailable"
   >("checking");
@@ -242,7 +249,7 @@ export function TitleDetail({
         >
           <button
             ref={closeRef}
-            className="title-detail__close"
+            className="title-detail__close close-icon-button"
             type="button"
             onClick={onClose}
             aria-label="Close details"
@@ -254,6 +261,13 @@ export function TitleDetail({
             {current.year ? ` · ${current.year}` : ""}
           </p>
           <h2>{current.title}</h2>
+          {current.genres.length > 0 && (
+            <ul className="title-detail__genres" aria-label="Genres">
+              {current.genres.map((genre) => (
+                <li key={genre}>{genre}</li>
+              ))}
+            </ul>
+          )}
           <p>{current.synopsis}</p>
           <div className="title-detail__ratings">
             {current.ratings.map((rating) => (
@@ -293,11 +307,6 @@ export function TitleDetail({
             )}
           </div>
         </div>
-        {error && (
-          <p className="page-message page-message--error" role="alert">
-            {error}
-          </p>
-        )}
         {current.kind === "series" && (
           <div className="title-detail__body">
             <div className="title-detail__heading">
@@ -426,6 +435,10 @@ export function TitleDetail({
                   type="button"
                   key={related.id}
                   onClick={() => onOpenRelated(related)}
+                  onPointerEnter={(event) => {
+                    if (event.pointerType === "mouse") playCardHoverTick();
+                  }}
+                  onFocus={playCardHoverTick}
                 >
                   {related.posterUrl && <img src={related.posterUrl} alt="" />}
                   <span>

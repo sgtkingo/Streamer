@@ -101,6 +101,11 @@ describe("TitleDetail", () => {
     });
     expect(await within(dialog).findByText(/Pilot/)).toBeInTheDocument();
     expect(
+      within(within(dialog).getByRole("list", { name: "Genres" })).getByText(
+        "Mystery",
+      ),
+    ).toBeInTheDocument();
+    expect(
       within(dialog).getAllByText("• searching...").length,
     ).toBeGreaterThan(0);
     const readyEpisode = within(dialog).getByText(/Pilot/).closest("li")!;
@@ -122,5 +127,44 @@ describe("TitleDetail", () => {
       },
       "Pilot",
     );
+  });
+
+  it("shows movie genres already present in validated metadata", async () => {
+    const movie: CatalogTitle = {
+      ...title,
+      kind: "movie",
+      title: "Sample Movie",
+      genres: ["Drama", "Comedy"],
+      availability: "available",
+      seriesCoverage: null,
+    };
+    const api = {
+      getTitleDetail: vi.fn().mockResolvedValue({
+        title: movie,
+        related: [],
+        series: null,
+      } satisfies Detail),
+    } as unknown as StreamerApi;
+    render(
+      <TitleDetail
+        api={api}
+        profileId="default"
+        title={movie}
+        playbackEnabled={false}
+        onClose={vi.fn()}
+        onOpenRelated={vi.fn()}
+        onPlay={vi.fn()}
+        onAdded={vi.fn()}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Details for Sample Movie",
+    });
+    const genres = within(dialog).getByRole("list", { name: "Genres" });
+    expect(within(genres).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(genres).getByText("Drama")).toBeInTheDocument();
+    expect(within(genres).getByText("Comedy")).toBeInTheDocument();
+    expect(api.getTitleDetail).toHaveBeenCalledWith("default", movie.id);
   });
 });

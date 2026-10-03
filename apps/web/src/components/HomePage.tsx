@@ -8,6 +8,7 @@ import type {
 } from "@streamer-ai/contracts";
 import type { PlaybackGrant, StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
+import { useToasts } from "./ToastProvider";
 import { TitleCard } from "./TitleCard";
 import { usePlaybackChecks } from "./usePlaybackChecks";
 
@@ -59,11 +60,16 @@ export function HomePage({
 }: HomePageProps) {
   const [feed, setFeed] = useState<HomeFeed | null>(null);
   const [query, setQuery] = useState("");
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatPendingMessage, setChatPendingMessage] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatSearching, setChatSearching] = useState(false);
+  const [chatError, setChatError] = useState("");
   const [result, setResult] = useState<DiscoveryUiResponse | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [isWakingAgent, setIsWakingAgent] = useState(false);
   const [activeStage, setActiveStage] = useState(0);
-  const [isLaunching, setIsLaunching] = useState(false);
   const [isLoadingFeed, setIsLoadingFeed] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -72,10 +78,15 @@ export function HomePage({
     null,
   );
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
+  const { showToast } = useToasts();
   const requestCounter = useRef(0);
   const searchSerial = useRef(0);
   const activeSearch = useRef<AbortController | null>(null);
-  const sessionIsClean = useRef(true);
+  const activeSearchKey = useRef<string | null>(null);
+  const activeChat = useRef<AbortController | null>(null);
+  const activeChatKey = useRef<string | null>(null);
+  const chatSerial = useRef(0);
+  const chatLogRef = useRef<HTMLOListElement>(null);
   const searchProgressRef = useRef<HTMLElement>(null);
   const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
   const scrollToNextResult = useRef(false);
@@ -110,9 +121,9 @@ export function HomePage({
     setAnnouncement(
       `${count} validated ${count === 1 ? "title" : "titles"} ready.`,
     );
-    resultsHeadingRef.current?.focus();
     if (scrollToNextResult.current) {
       scrollToNextResult.current = false;
+      resultsHeadingRef.current?.focus({ preventScroll: true });
       resultsHeadingRef.current?.scrollIntoView?.({
         behavior: "smooth",
         block: "start",
@@ -121,7 +132,25 @@ export function HomePage({
   }, [result]);
 
   useEffect(() => {
-    if (!isSearching) return;
+    if (chatOpen && chatLogRef.current) {
+      chatLogRef.current.scrollTop = chatLogRef.current.scrollHeight;
+    }
+  }, [chatOpen, turns, chatSearching]);
+
+  useEffect(() => {
+    if (error) {
+      showToast(error, "error");
+    }
+  }, [error, showToast]);
+
+  useEffect(() => {
+    if (notice) {
+      showToast(notice, "success");
+    }
+  }, [notice, showToast]);
+
+  useEffect(() => {
+    if (!isSearching || isStopping) return;
     searchProgressRef.current?.scrollIntoView?.({
       behavior: "smooth",
       block: "center",
@@ -130,7 +159,7 @@ export function HomePage({
       setActiveStage((stage) => Math.min(stage + 1, isWakingAgent ? 1 : 3));
     }, 650);
     return () => window.clearInterval(interval);
-  }, [isSearching, isWakingAgent]);
+  }, [isSearching, isStopping, isWakingAgent]);
 
   useEffect(() => {
     if (!isSearching || !isWakingAgent) return;
@@ -161,21 +190,44 @@ export function HomePage({
   useEffect(
     () => () => {
       searchSerial.current += 1;
+      if (activeSearchKey.current) {
+        void api
+          .cancelDiscovery(profileId, activeSearchKey.current)
+          .catch(() => undefined);
+      }
       activeSearch.current?.abort();
+      chatSerial.current += 1;
+      if (activeChatKey.current) {
+        void api
+          .cancelDiscovery(profileId, activeChatKey.current)
+          .catch(() => undefined);
+      }
+      activeChat.current?.abort();
     },
-    [profileId],
+    [api, profileId],
   );
 
-  const stopSearch = () => {
+  const stopSearch = async () => {
+    if (isStopping) return;
     searchSerial.current += 1;
-    activeSearch.current?.abort();
-    activeSearch.current = null;
-    // The server may have completed the cancelled turn before the transport closed.
-    sessionIsClean.current = false;
-    setIsSearching(false);
+    const key = activeSearchKey.current;
+    setIsStopping(true);
     setIsWakingAgent(false);
-    setIsLaunching(false);
-    setAnnouncement("Search stopped.");
+    setAnnouncement("Stopping search…");
+    activeSearch.current?.abort();
+    try {
+      if (key) await api.cancelDiscovery(profileId, key);
+      setAnnouncement("Search stopped.");
+    } catch {
+      setError("Could not confirm that the search stopped. Please try again.");
+      setAnnouncement("Search stop could not be confirmed.");
+    } finally {
+      activeSearch.current = null;
+      activeSearchKey.current = null;
+      setIsSearching(false);
+      setIsStopping(false);
+      setIsWakingAgent(false);
+    }
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -184,18 +236,30 @@ export function HomePage({
     if (message.length < 2 || activeSearch.current) return;
     const controller = new AbortController();
     const serial = ++searchSerial.current;
-    const keepConversation = sessionIsClean.current;
+    const idempotencyKey = `${Date.now()}-${++requestCounter.current}`;
+    chatSerial.current += 1;
+    if (activeChatKey.current) {
+      void api
+        .cancelDiscovery(profileId, activeChatKey.current)
+        .catch(() => undefined);
+    }
+    activeChat.current?.abort();
+    activeChat.current = null;
+    activeChatKey.current = null;
+    setChatSearching(false);
+    setChatOpen(false);
+    setChatDraft("");
+    setChatPendingMessage("");
+    setChatError("");
     activeSearch.current = controller;
+    activeSearchKey.current = idempotencyKey;
     setIsSearching(true);
+    setIsStopping(false);
     setIsWakingAgent(false);
-    setIsLaunching(true);
     setActiveStage(0);
     setError("");
     setNotice("");
     setAnnouncement("StreamerAI is finding and validating titles.");
-    window.setTimeout(() => {
-      if (serial === searchSerial.current) setIsLaunching(false);
-    }, 600);
     try {
       if (feed?.mode === "live") {
         try {
@@ -220,8 +284,7 @@ export function HomePage({
         {
           profileId,
           message,
-          sessionId: keepConversation ? result?.sessionId : undefined,
-          idempotencyKey: `${Date.now()}-${++requestCounter.current}`,
+          idempotencyKey,
         },
         controller.signal,
       );
@@ -230,11 +293,9 @@ export function HomePage({
       // Let the final validation cue register before revealing a fast response.
       await new Promise((resolve) => window.setTimeout(resolve, 450));
       if (serial !== searchSerial.current || controller.signal.aborted) return;
-      sessionIsClean.current = true;
       scrollToNextResult.current = true;
       setResult(response as DiscoveryUiResponse);
-      setTurns((current) => [
-        ...(keepConversation ? current : []),
+      setTurns([
         {
           id: `${response.sessionId}-user-${requestCounter.current}`,
           role: "user",
@@ -249,15 +310,70 @@ export function HomePage({
       setQuery("");
     } catch (searchError) {
       if (serial === searchSerial.current && !controller.signal.aborted) {
-        sessionIsClean.current = false;
         setError(safeErrorMessage(searchError));
       }
     } finally {
       if (serial === searchSerial.current) {
         activeSearch.current = null;
+        activeSearchKey.current = null;
         setIsSearching(false);
         setIsWakingAgent(false);
-        setIsLaunching(false);
+      }
+    }
+  };
+
+  const submitChat = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const message = chatDraft.trim();
+    if (!result || isSearching || activeChat.current || message.length < 2)
+      return;
+    const controller = new AbortController();
+    const serial = ++chatSerial.current;
+    const idempotencyKey = `${Date.now()}-${++requestCounter.current}`;
+    activeChat.current = controller;
+    activeChatKey.current = idempotencyKey;
+    setChatSearching(true);
+    setChatPendingMessage(message);
+    setChatDraft("");
+    setChatError("");
+    try {
+      const response = await api.discover(
+        {
+          profileId,
+          message,
+          sessionId: result.sessionId,
+          idempotencyKey,
+        },
+        controller.signal,
+      );
+      if (serial !== chatSerial.current || controller.signal.aborted) return;
+      scrollToNextResult.current = true;
+      setResult(response);
+      setTurns((current) => [
+        ...current,
+        {
+          id: `${response.sessionId}-user-${requestCounter.current}`,
+          role: "user",
+          text: message,
+        },
+        {
+          id: `${response.sessionId}-assistant-${requestCounter.current}`,
+          role: "assistant",
+          text: response.reply,
+        },
+      ]);
+      setChatPendingMessage("");
+    } catch (chatFailure) {
+      if (serial === chatSerial.current && !controller.signal.aborted) {
+        setChatError(safeErrorMessage(chatFailure));
+        setChatPendingMessage("");
+        setChatDraft((current) => current || message);
+      }
+    } finally {
+      if (serial === chatSerial.current) {
+        activeChat.current = null;
+        activeChatKey.current = null;
+        setChatSearching(false);
       }
     }
   };
@@ -266,6 +382,7 @@ export function HomePage({
     if (pendingAction) return;
     setPendingAction({ titleId: item.id, kind: "add" });
     setError("");
+    setNotice("");
     try {
       await api.addToLibrary(profileId, item.id);
       setNotice(`${item.title} was added to your Library.`);
@@ -312,6 +429,12 @@ export function HomePage({
     locale === "cs"
       ? "Ouč, agent usnul. Musím ho vzbudit, počkej chvíli…"
       : "Ouch, the local agent dozed off. Waking it up—hang tight…";
+  const chatQuestion =
+    locale === "cs"
+      ? "Je to podle tvých představ?"
+      : locale === "de"
+        ? "Ist das, was du dir vorgestellt hast?"
+        : "Is this what you had in mind?";
 
   return (
     <main id="home" className="home-page">
@@ -336,17 +459,24 @@ export function HomePage({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                if (!isSearching) event.currentTarget.form?.requestSubmit();
+                if (!isSearching && !isStopping)
+                  event.currentTarget.form?.requestSubmit();
               }
             }}
             placeholder={"Try “an autumn movie with Sandra Bullock”"}
           />
           <button
-            className={`composer-submit${isSearching ? " is-searching" : ""}${isLaunching ? " is-launching" : ""}`}
+            className={`composer-submit${isSearching ? " is-searching" : ""}${isStopping ? " is-stopping" : ""}`}
             type={isSearching ? "button" : "submit"}
             onClick={isSearching ? stopSearch : undefined}
-            disabled={!isSearching && query.trim().length < 2}
-            aria-label={isSearching ? "Stop search" : "Find something"}
+            disabled={isStopping || (!isSearching && query.trim().length < 2)}
+            aria-label={
+              isStopping
+                ? "Stopping search"
+                : isSearching
+                  ? "Stop search"
+                  : "Find something"
+            }
           >
             <span className="composer-submit__label" aria-hidden={isSearching}>
               Find something{" "}
@@ -383,21 +513,28 @@ export function HomePage({
             aria-live="polite"
             aria-label="Discovery progress"
           >
-            {stageLabels.map((label, index) => (
-              <span
-                key={label}
-                className={
-                  index === activeStage
-                    ? "is-active"
-                    : index < activeStage
-                      ? "is-done"
-                      : ""
-                }
-              >
+            {isStopping ? (
+              <span className="is-active">
                 <span className="pipeline__indicator" aria-hidden="true" />
-                {label}
+                Stopping search…
               </span>
-            ))}
+            ) : (
+              stageLabels.map((label, index) => (
+                <span
+                  key={label}
+                  className={
+                    index === activeStage
+                      ? "is-active"
+                      : index < activeStage
+                        ? "is-done"
+                        : ""
+                  }
+                >
+                  <span className="pipeline__indicator" aria-hidden="true" />
+                  {label}
+                </span>
+              ))
+            )}
           </section>
           {isWakingAgent && (
             <p className="agent-wake-notice" role="status">
@@ -412,17 +549,6 @@ export function HomePage({
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}
       </p>
-      {error && (
-        <p className="page-message page-message--error" role="alert">
-          {error}
-        </p>
-      )}
-      {notice && (
-        <p className="page-message" role="status">
-          {notice}
-        </p>
-      )}
-
       {result && (
         <section
           className="discovery-results"
@@ -437,20 +563,6 @@ export function HomePage({
             </div>
             <p>{result.reply}</p>
           </div>
-          <ol
-            className="conversation-thread"
-            aria-label="Discovery conversation"
-          >
-            {turns.map((turn) => (
-              <li
-                key={turn.id}
-                className={`conversation-turn conversation-turn--${turn.role}`}
-              >
-                <span>{turn.role === "user" ? "You" : "StreamerAI"}</span>
-                <p>{turn.text}</p>
-              </li>
-            ))}
-          </ol>
           {result.warnings.map((warning) => (
             <p className="preview-notice" key={warning}>
               {warning}
@@ -598,6 +710,117 @@ export function HomePage({
           </section>
         ))}
       </div>
+      {result?.mode === "live" &&
+        result.stage === "completed" &&
+        !isSearching && (
+          <aside
+            className={`discovery-chat${chatOpen ? " is-open" : ""}`}
+            aria-label="StreamerAI chat"
+          >
+            {chatOpen ? (
+              <div className="discovery-chat__panel" id="discovery-chat-panel">
+                <div className="discovery-chat__header">
+                  <div>
+                    <span className="discovery-chat__eyebrow">
+                      CURRENT SEARCH
+                    </span>
+                    <h2>Chat with StreamerAI</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="discovery-chat__close close-icon-button"
+                    aria-label="Close chat"
+                    onClick={() => setChatOpen(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <ol
+                  className="discovery-chat__messages"
+                  ref={chatLogRef}
+                  aria-label="Discovery conversation"
+                >
+                  {turns.map((turn) => (
+                    <li
+                      key={turn.id}
+                      className={`conversation-turn conversation-turn--${turn.role}`}
+                    >
+                      <span>{turn.role === "user" ? "You" : "StreamerAI"}</span>
+                      <p>{turn.text}</p>
+                    </li>
+                  ))}
+                  {chatSearching && (
+                    <>
+                      <li className="conversation-turn conversation-turn--user">
+                        <span>You</span>
+                        <p>{chatPendingMessage}</p>
+                      </li>
+                      <li
+                        className="conversation-turn conversation-turn--assistant"
+                        role="status"
+                      >
+                        <span>StreamerAI</span>
+                        <p className="discovery-chat__typing">
+                          Rethinking your picks<span aria-hidden="true">…</span>
+                        </p>
+                      </li>
+                    </>
+                  )}
+                </ol>
+                {chatError && (
+                  <p className="discovery-chat__error" role="alert">
+                    {chatError}
+                  </p>
+                )}
+                <form className="discovery-chat__form" onSubmit={submitChat}>
+                  <label className="sr-only" htmlFor="discovery-chat-input">
+                    Reply to StreamerAI
+                  </label>
+                  <textarea
+                    id="discovery-chat-input"
+                    rows={2}
+                    value={chatDraft}
+                    onChange={(event) => setChatDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        event.currentTarget.form?.requestSubmit();
+                      }
+                    }}
+                    placeholder="Tell me what to change…"
+                  />
+                  <button
+                    type="submit"
+                    disabled={chatSearching || chatDraft.trim().length < 2}
+                  >
+                    Send
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="discovery-chat__bubble"
+                aria-expanded="false"
+                onClick={() => setChatOpen(true)}
+              >
+                <span className="discovery-chat__mark" aria-hidden="true">
+                  ✦
+                </span>
+                <span>
+                  <strong>StreamerAI</strong>
+                  <small>{chatQuestion}</small>
+                </span>
+                <span
+                  className="discovery-chat__bubble-arrow"
+                  aria-hidden="true"
+                >
+                  ↗
+                </span>
+              </button>
+            )}
+          </aside>
+        )}
     </main>
   );
 }

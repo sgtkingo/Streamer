@@ -60,6 +60,7 @@ async function connectedStateStore() {
 function coordinatorDependencies() {
   const generateStructured = vi.fn().mockResolvedValue({
     output: {
+      acknowledgement: "I tuned the mood to your request.",
       people: [],
       candidates: [
         {
@@ -199,12 +200,10 @@ describe("LiveContentCoordinator", () => {
               ? secondSearch
               : [],
         ),
-      inspect: vi
-        .fn()
-        .mockImplementation(async (ref) => ({
-          ref,
-          variantId: ref.candidateId,
-        })),
+      inspect: vi.fn().mockImplementation(async (ref) => ({
+        ref,
+        variantId: ref.candidateId,
+      })),
       createPlayback: vi.fn().mockResolvedValue({ titleId: title.id }),
     } as unknown as MediaProvider;
     const metadata = {
@@ -314,6 +313,72 @@ describe("LiveContentCoordinator", () => {
     expect(response.unavailable[0]?.title.title).toBe("Canonical Two");
     expect(response.unavailable[0]?.title.metadataProvider).toBe("tmdb");
     expect(response.available).toHaveLength(0);
+    expect(response.reply).toContain("I tuned the mood to your request.");
+    expect(response.reply).toContain("Is this what you had in mind?");
+  });
+
+  it("passes prior validated suggestions and user objections back to the agent", async () => {
+    const dependencies = coordinatorDependencies();
+    const coordinator = new LiveContentCoordinator({
+      ...dependencies,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+
+    await coordinator.discover(
+      {
+        profileId: "default",
+        sessionId: "conversation-one",
+        message: "Less spooky, please",
+        idempotencyKey: "request-feedback",
+      },
+      NOW,
+      {
+        sessionId: "conversation-one",
+        messages: [
+          {
+            role: "user",
+            content: { message: "An autumn mystery" },
+            createdAt: NOW,
+          },
+          {
+            role: "assistant",
+            content: { reply: "Try Canonical One.", titles: ["Canonical One"] },
+            createdAt: NOW,
+          },
+          {
+            role: "user",
+            content: { message: "Less spooky, please" },
+            createdAt: NOW,
+          },
+        ],
+      },
+    );
+    const input = dependencies.generateStructured.mock.calls[0]?.[0];
+    expect(input.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: "Less spooky, please",
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.stringContaining(
+            "Previously suggested: Canonical One",
+          ),
+        }),
+      ]),
+    );
   });
 
   it("returns needs-setup without invoking the model when a provider is disconnected", async () => {

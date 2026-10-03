@@ -34,6 +34,7 @@ const AGENT_SCHEMA = {
   additionalProperties: false,
   required: ["people", "candidates"],
   properties: {
+    acknowledgement: { type: "string", maxLength: 220 },
     people: {
       type: "array",
       maxItems: 3,
@@ -73,6 +74,7 @@ interface AgentCandidate {
 }
 
 interface AgentPlan {
+  acknowledgement: string;
   people: string[];
   candidates: AgentCandidate[];
 }
@@ -168,33 +170,54 @@ function parseAgentPlan(value: unknown): AgentPlan {
   if (candidates.length === 0) {
     throw new Error("The discovery agent did not suggest any candidates.");
   }
-  return { people, candidates };
+  return {
+    acknowledgement:
+      typeof body.acknowledgement === "string"
+        ? body.acknowledgement.trim().slice(0, 220)
+        : "",
+    people,
+    candidates,
+  };
 }
 
 function discoveryReply(
   locale: "cs" | "en" | "de",
   validatedCount: number,
   best: RankedTitle | null,
+  acknowledgement: string,
 ): string {
+  let summary: string;
+  let question: string;
   if (locale === "cs") {
+    question = "Je to to, co sis představoval? Napiš mi, co mám změnit.";
     if (best !== null)
-      return `Nejlepší ověřený tip je ${best.title.title}. Níže jsou pouze tituly ověřené přes TMDB a Webshare.`;
-    if (validatedCount > 0)
-      return `Našel jsem ${validatedCount} odpovídající tituly, ale Webshare u žádného nepotvrdil přehratelnou variantu.`;
-    return "Našel jsem několik námětů, ale žádný se nepodařilo spolehlivě ověřit přes TMDB a Webshare.";
-  }
-  if (locale === "de") {
+      summary = `Nejlepší ověřený tip je ${best.title.title}. Níže jsou pouze tituly ověřené přes TMDB a Webshare.`;
+    else if (validatedCount > 0)
+      summary = `Našel jsem ${validatedCount} odpovídající tituly, ale Webshare u žádného nepotvrdil přehratelnou variantu.`;
+    else
+      summary =
+        "Našel jsem několik námětů, ale žádný se nepodařilo spolehlivě ověřit přes TMDB a Webshare.";
+  } else if (locale === "de") {
+    question =
+      "Ist das, was du dir vorgestellt hast? Sag mir, was ich ändern soll.";
     if (best !== null)
-      return `Der beste geprüfte Tipp ist ${best.title.title}. Unten erscheinen nur über TMDB und Webshare geprüfte Titel.`;
-    if (validatedCount > 0)
-      return `${validatedCount} passende Titel wurden gefunden, aber Webshare bestätigte keine abspielbare Variante.`;
-    return "Einige Ideen wurden gefunden, aber keine konnte zuverlässig über TMDB und Webshare geprüft werden.";
+      summary = `Der beste geprüfte Tipp ist ${best.title.title}. Unten erscheinen nur über TMDB und Webshare geprüfte Titel.`;
+    else if (validatedCount > 0)
+      summary = `${validatedCount} passende Titel wurden gefunden, aber Webshare bestätigte keine abspielbare Variante.`;
+    else
+      summary =
+        "Einige Ideen wurden gefunden, aber keine konnte zuverlässig über TMDB und Webshare geprüft werden.";
+  } else {
+    question = "Is this what you had in mind? Tell me what to change.";
+    if (best !== null)
+      summary = `The best validated match is ${best.title.title}. Only titles checked through TMDB and Webshare are shown below.`;
+    else if (validatedCount > 0)
+      summary = `${validatedCount} matching titles were found, but Webshare did not confirm a playable variant for any of them.`;
+    else
+      summary =
+        "I found some ideas, but none could be validated reliably through TMDB and Webshare.";
   }
-  if (best !== null)
-    return `The best validated match is ${best.title.title}. Only titles checked through TMDB and Webshare are shown below.`;
-  if (validatedCount > 0)
-    return `${validatedCount} matching titles were found, but Webshare did not confirm a playable variant for any of them.`;
-  return "I found some ideas, but none could be validated reliably through TMDB and Webshare.";
+  return `${acknowledgement ? `${acknowledgement} ` : ""}${summary} ${question}`;
 }
 
 function normalize(value: string): string {
@@ -299,6 +322,7 @@ function providerContext(
   request: DiscoveryRequest,
   locale: "cs" | "en" | "de",
   now: Date,
+  signal?: AbortSignal,
 ): ProviderContext {
   return {
     requestId: request.idempotencyKey,
@@ -306,6 +330,7 @@ function providerContext(
     locale,
     deadlineAt: new Date(now.getTime() + 55_000).toISOString(),
     secretRef: null,
+    signal,
   };
 }
 
@@ -405,7 +430,9 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     completedAt: string,
     conversation?: DiscoveryConversationContext,
   ): Promise<DiscoveryResponse> {
+    conversation?.signal?.throwIfAborted();
     const missing = await this.missingRequiredIntegrations();
+    conversation?.signal?.throwIfAborted();
     if (missing.length > 0) {
       return DiscoveryResponseSchema.parse({
         sessionId: request.sessionId,
@@ -424,21 +451,38 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     }
 
     const locale = this.#localeForProfile(request.profileId);
-    const context = providerContext(request, locale, this.#now());
-    const history = (conversation?.messages ?? []).slice(-8).map((message) => ({
-      role: message.role,
-      content:
-        typeof message.content === "string"
-          ? message.content
-          : JSON.stringify(message.content),
-    }));
+    const context = providerContext(
+      request,
+      locale,
+      this.#now(),
+      conversation?.signal,
+    );
+    const history = (conversation?.messages ?? []).slice(-8).map((message) => {
+      const data = record(message.content);
+      const previousTitles = Array.isArray(data?.titles)
+        ? data.titles
+            .filter((title): title is string => typeof title === "string")
+            .slice(0, 6)
+        : [];
+      return {
+        role: message.role,
+        content:
+          typeof data?.message === "string"
+            ? data.message
+            : typeof data?.reply === "string"
+              ? `${data.reply}${previousTitles.length ? ` Previously suggested: ${previousTitles.join(", ")}.` : ""}`
+              : typeof message.content === "string"
+                ? message.content
+                : JSON.stringify(message.content),
+      };
+    });
     const generation = await this.#agent.generateStructured<unknown>(
       {
         model: this.#inference.model,
         messages: [
           {
             role: "system",
-            content: `You propose films and series for a ${locale} user. Extract only people explicitly named by the user into the people array. Return exactly 6 real, correctly spelled candidate titles that best satisfy the latest request. Every candidate must actually feature each explicitly named person. Prefer well-known titles when uncertain. Use your knowledge only to propose title, kind, approximate release year, a short preference-based reason, and match score. Do not invent metadata, availability, ratings, people, or URLs. Output only the requested JSON.`,
+            content: `You propose films and series for a ${locale} user. The latest message may be feedback on an earlier shortlist: keep the user's original preferences unless revised, apply objections, and avoid previously suggested titles the user rejected. Put only currently required people in the people array; omit people the user rejected. Return exactly 6 real, correctly spelled candidate titles that best satisfy the latest request and conversation. Every candidate must actually feature each currently required person. Prefer well-known titles when uncertain. Use your knowledge only to propose title, kind, approximate release year, a short preference-based reason, and match score. Add a brief acknowledgement in the user's language that responds to their latest preference or objection; do not name unvalidated titles or claim availability, ratings, or other unverified facts in it. Do not invent metadata, availability, ratings, people, or URLs. Output only the requested JSON.`,
           },
           ...history,
           ...(history.some(
@@ -457,11 +501,13 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       },
       context,
     );
+    context.signal?.throwIfAborted();
     const plan = parseAgentPlan(generation.output);
     const validated: ValidatedCandidate[] = [];
     const warnings: string[] = [];
     const seen = new Set<string>();
     for (const candidate of plan.candidates) {
+      context.signal?.throwIfAborted();
       try {
         const result = await this.validateCandidate(
           candidate,
@@ -472,11 +518,14 @@ export class LiveContentCoordinator implements StreamerContentProvider {
         seen.add(result.ranked.title.id);
         validated.push(result);
       } catch {
+        context.signal?.throwIfAborted();
         warnings.push(
           `Could not validate '${candidate.title}' against live providers.`,
         );
       }
     }
+
+    context.signal?.throwIfAborted();
 
     const available = validated
       .filter((item) =>
@@ -523,7 +572,12 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       sessionId: request.sessionId,
       mode: "live",
       stage: "completed",
-      reply: discoveryReply(locale, validated.length, best?.ranked ?? null),
+      reply: discoveryReply(
+        locale,
+        validated.length,
+        best?.ranked ?? null,
+        plan.acknowledgement,
+      ),
       bestMatch: best?.ranked ?? null,
       available: available.map((item) => item.ranked),
       unavailable: validated
@@ -890,6 +944,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       );
       const inspected = [];
       for (const candidate of matching.slice(0, 12)) {
+        context.signal?.throwIfAborted();
         if (
           metadata.kind === "series" &&
           episodeNumber(candidate.releaseName) === null
@@ -902,6 +957,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
             variant: await this.#media.inspect(candidate.ref, context),
           });
         } catch {
+          context.signal?.throwIfAborted();
           // A rejected/restricted file is not playable and is skipped.
         }
       }
@@ -966,6 +1022,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
         };
       }
     } catch {
+      context.signal?.throwIfAborted();
       availability = "unknown";
     }
 

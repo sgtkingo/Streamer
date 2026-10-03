@@ -28,6 +28,47 @@ function response(value: unknown) {
 }
 
 describe("Ollama agent adapter", () => {
+  it("interrupts a running Ollama request when discovery is cancelled", async () => {
+    const controller = new AbortController();
+    let started!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let ollamaSignal: AbortSignal | undefined;
+    const fetch: OllamaFetch = async (_url, init) => {
+      ollamaSignal = init.signal;
+      started();
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    };
+    const provider = new OllamaAgentProvider({
+      config,
+      fetch,
+      now: () => new Date("2026-09-28T12:00:00.000Z"),
+    });
+    const generation = provider.generateStructured(
+      {
+        model: "qwen3.5:4b",
+        messages: [{ role: "user", content: "Find a comedy" }],
+        outputSchemaName: "titles",
+        outputJsonSchema: { type: "object", properties: {} },
+        allowedToolNames: [],
+        temperature: 0,
+        maxOutputTokens: 64,
+      },
+      { ...context, signal: controller.signal },
+    );
+    await requestStarted;
+    controller.abort();
+    await expect(generation).rejects.toMatchObject({ kind: "timeout" });
+    expect(ollamaSignal?.aborted).toBe(true);
+  });
+
   it("uses strict structured output without exposing a general runtime endpoint", async () => {
     let posted: Record<string, unknown> | undefined;
     const fetch: OllamaFetch = async (_url, init) => {

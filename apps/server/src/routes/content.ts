@@ -10,6 +10,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   StreamerCore,
   DiscoverySessionClosedError,
+  DiscoveryCancelledError,
   DiscoverySessionNotFoundError,
   IdempotencyConflictError,
   PlaybackNotConfiguredError,
@@ -106,6 +107,14 @@ function sendDomainError(reply: FastifyReply, error: unknown) {
       error: {
         code: "REQUEST_PREVIOUSLY_FAILED",
         message: "The previous attempt failed. Retry with a new request key.",
+      },
+    });
+  }
+  if (error instanceof DiscoveryCancelledError) {
+    return reply.code(409).send({
+      error: {
+        code: "DISCOVERY_CANCELLED",
+        message: "The discovery request was cancelled.",
       },
     });
   }
@@ -234,10 +243,51 @@ export function registerContentRoutes(
       },
     },
     async (request, reply) => {
+      const controller = new AbortController();
+      const onClose = () => {
+        if (!reply.raw.writableEnded) controller.abort();
+      };
+      reply.raw.once("close", onClose);
       try {
         return await dependencies.core.discover(
           DiscoveryRequestSchema.parse(request.body),
+          controller.signal,
         );
+      } catch (error) {
+        return sendDomainError(reply, error);
+      } finally {
+        reply.raw.off("close", onClose);
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/discovery/cancel",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["profileId", "idempotencyKey"],
+          additionalProperties: false,
+          properties: {
+            profileId: { type: "string", minLength: 1, maxLength: 120 },
+            idempotencyKey: { type: "string", minLength: 8, maxLength: 120 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const body = request.body as {
+          profileId: string;
+          idempotencyKey: string;
+        };
+        return {
+          cancelled: dependencies.core.cancelDiscovery(
+            body.profileId,
+            body.idempotencyKey,
+          ),
+        };
       } catch (error) {
         return sendDomainError(reply, error);
       }

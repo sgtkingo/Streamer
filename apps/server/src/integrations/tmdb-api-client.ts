@@ -85,91 +85,144 @@ export class TmdbApiClient {
     this.#timeoutMs = options.timeoutMs ?? 8_000;
   }
 
-  searchMovie(input: {
-    query: string;
-    year?: number;
-    language?: string;
-  }): Promise<unknown> {
-    return this.get("/search/movie", {
-      query: input.query,
-      ...(input.year === undefined ? {} : { year: String(input.year) }),
-      language: input.language ?? "en-US",
-      include_adult: "false",
-      page: "1",
-    });
+  searchMovie(
+    input: {
+      query: string;
+      year?: number;
+      language?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.get(
+      "/search/movie",
+      {
+        query: input.query,
+        ...(input.year === undefined ? {} : { year: String(input.year) }),
+        language: input.language ?? "en-US",
+        include_adult: "false",
+        page: "1",
+      },
+      signal,
+    );
   }
 
-  searchSeries(input: {
-    query: string;
-    year?: number;
-    language?: string;
-  }): Promise<unknown> {
-    return this.get("/search/tv", {
-      query: input.query,
-      ...(input.year === undefined
-        ? {}
-        : { first_air_date_year: String(input.year) }),
-      language: input.language ?? "en-US",
-      include_adult: "false",
-      page: "1",
-    });
+  searchSeries(
+    input: {
+      query: string;
+      year?: number;
+      language?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.get(
+      "/search/tv",
+      {
+        query: input.query,
+        ...(input.year === undefined
+          ? {}
+          : { first_air_date_year: String(input.year) }),
+        language: input.language ?? "en-US",
+        include_adult: "false",
+        page: "1",
+      },
+      signal,
+    );
   }
 
-  searchPerson(query: string, language = "en-US"): Promise<unknown> {
-    return this.get("/search/person", {
-      query,
-      language,
-      include_adult: "false",
-      page: "1",
-    });
+  searchPerson(
+    query: string,
+    language = "en-US",
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.get(
+      "/search/person",
+      {
+        query,
+        language,
+        include_adult: "false",
+        page: "1",
+      },
+      signal,
+    );
   }
 
-  getPersonCombinedCredits(id: number, language = "en-US"): Promise<unknown> {
-    return this.get(`/person/${this.safeId(id)}/combined_credits`, {
-      language,
-    });
+  getPersonCombinedCredits(
+    id: number,
+    language = "en-US",
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.get(
+      `/person/${this.safeId(id)}/combined_credits`,
+      {
+        language,
+      },
+      signal,
+    );
   }
 
-  getMovie(id: number, language = "en-US"): Promise<unknown> {
-    return this.get(`/movie/${this.safeId(id)}`, { language });
+  getMovie(
+    id: number,
+    language = "en-US",
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.get(`/movie/${this.safeId(id)}`, { language }, signal);
   }
 
-  getSeries(id: number, language = "en-US"): Promise<unknown> {
-    return this.get(`/tv/${this.safeId(id)}`, { language });
+  getSeries(
+    id: number,
+    language = "en-US",
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.get(`/tv/${this.safeId(id)}`, { language }, signal);
   }
 
   getSeason(
     seriesId: number,
     seasonNumber: number,
     language = "en-US",
+    signal?: AbortSignal,
   ): Promise<unknown> {
     if (!Number.isInteger(seasonNumber) || seasonNumber < 0) {
       throw new TypeError("TMDB season number must be a non-negative integer.");
     }
-    return this.get(`/tv/${this.safeId(seriesId)}/season/${seasonNumber}`, {
-      language,
-    });
+    return this.get(
+      `/tv/${this.safeId(seriesId)}/season/${seasonNumber}`,
+      {
+        language,
+      },
+      signal,
+    );
   }
 
   getFeed(
     kind: "movie" | "series",
     feed: "trending" | "popular" | "top_rated" | "now_playing",
     language = "en-US",
+    signal?: AbortSignal,
   ): Promise<unknown> {
     if (feed === "trending") {
-      return this.get(`/trending/${kind === "movie" ? "movie" : "tv"}/week`, {
-        language,
-      });
+      return this.get(
+        `/trending/${kind === "movie" ? "movie" : "tv"}/week`,
+        {
+          language,
+        },
+        signal,
+      );
     }
     const namespace = kind === "movie" ? "movie" : "tv";
     const supportedFeed =
       namespace === "tv" && feed === "now_playing" ? "on_the_air" : feed;
-    return this.get(`/${namespace}/${supportedFeed}`, { language, page: "1" });
+    return this.get(
+      `/${namespace}/${supportedFeed}`,
+      { language, page: "1" },
+      signal,
+    );
   }
 
   async get(
     path: string,
     query: Readonly<Record<string, string>> = {},
+    signal?: AbortSignal,
   ): Promise<unknown> {
     const token = await this.#secretStore.get(TMDB_READ_TOKEN_SECRET_KEY);
     if (token === undefined) {
@@ -181,14 +234,18 @@ export class TmdbApiClient {
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const requestSignal = signal
+      ? AbortSignal.any([controller.signal, signal])
+      : controller.signal;
     try {
+      requestSignal.throwIfAborted();
       const response = await this.#fetch(url.toString(), {
         method: "GET",
         headers: {
           accept: "application/json",
           authorization: `Bearer ${token}`,
         },
-        signal: controller.signal,
+        signal: requestSignal,
       });
       if (!response.ok) throw providerFailureForStatus("tmdb", response.status);
       return parseBoundedJson("tmdb", await response.text());

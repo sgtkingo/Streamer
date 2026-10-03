@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ViewerProfile } from "@streamer-ai/contracts";
 import { Brand } from "./Brand";
+import { useToasts } from "./ToastProvider";
 
 interface ProfileChooserProps {
   profiles: ViewerProfile[];
@@ -21,6 +22,30 @@ export function ProfileChooser({
   const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
   const [createError, setCreateError] = useState("");
+  const { showToast } = useToasts();
+  const retryRef = useRef(onRetry);
+  const lastErrorToastRef = useRef("");
+  retryRef.current = onRetry;
+
+  useEffect(() => {
+    if (!error) {
+      lastErrorToastRef.current = "";
+      return;
+    }
+    if (lastErrorToastRef.current === error) return;
+    lastErrorToastRef.current = error;
+    showToast(error, "error", {
+      action: retryRef.current
+        ? { label: "Try again", onClick: () => retryRef.current?.() }
+        : undefined,
+    });
+  }, [error, showToast]);
+
+  useEffect(() => {
+    if (createError) {
+      showToast(createError, "error");
+    }
+  }, [createError, showToast]);
 
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -52,16 +77,6 @@ export function ProfileChooser({
           Choose a profile to keep its discoveries, Library and watch history
           separate.
         </p>
-        {error && (
-          <p className="page-message page-message--error" role="alert">
-            {error}{" "}
-            {onRetry && (
-              <button type="button" onClick={onRetry}>
-                Try again
-              </button>
-            )}
-          </p>
-        )}
         <div className="profile-chooser__grid" aria-label="Choose a profile">
           {Array.from({ length: 5 }, (_, index) => {
             const profile = profiles[index];
@@ -137,11 +152,6 @@ export function ProfileChooser({
                 onChange={(event) => setName(event.target.value)}
               />
             </label>
-            {createError && (
-              <p className="page-message page-message--error" role="alert">
-                {createError}
-              </p>
-            )}
             <div className="profile-chooser__actions">
               <button
                 className="button button--ghost"

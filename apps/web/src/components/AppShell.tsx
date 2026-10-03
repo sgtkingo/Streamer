@@ -46,6 +46,7 @@ export function AppShell({
   playbackEnabled?: boolean;
 }) {
   const [route, setRoute] = useState<Route>(routeFromLocation);
+  const [homeVisit, setHomeVisit] = useState(0);
   const [libraryVersion, setLibraryVersion] = useState(0);
   const [activePlayback, setActivePlayback] = useState<{
     title: CatalogTitle;
@@ -103,9 +104,10 @@ export function AppShell({
 
   const navigate = (next: Route) => {
     window.history.pushState({}, "", next === "home" ? "/" : `/${next}`);
+    if (next === "home") setHomeVisit((visit) => visit + 1);
     setRoute(next);
     setProfileMenuOpen(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: next === "home" ? "auto" : "smooth" });
   };
 
   return (
@@ -188,7 +190,9 @@ export function AppShell({
               >
                 Statistics
               </button>
+              <span className="profile-menu__divider" aria-hidden="true" />
               <button
+                className="profile-menu__switch-profile"
                 role="menuitem"
                 type="button"
                 onClick={() => {
@@ -205,6 +209,7 @@ export function AppShell({
 
       {route === "home" ? (
         <HomePage
+          key={`${profileId}:${homeVisit}`}
           api={api}
           profileId={profileId}
           locale={profile.locale}

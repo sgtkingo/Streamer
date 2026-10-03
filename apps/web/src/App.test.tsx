@@ -97,6 +97,7 @@ function createApi(): StreamerApi {
       warnings: [],
       completedAt: "2026-09-27T12:00:00.000Z",
     }),
+    cancelDiscovery: vi.fn().mockResolvedValue(undefined),
     getLibrary: vi.fn().mockResolvedValue({ profileId: "default", items: [] }),
     addToLibrary: vi
       .fn()
@@ -660,12 +661,14 @@ describe("conversational Home", () => {
     ).toHaveClass("is-active");
     expect(within(returned).getByText(/Third Episode/)).toBeInTheDocument();
     expect(returned).toHaveProperty("scrollTop", 180);
-    await waitFor(() => expect(api.getTitleDetail).toHaveBeenCalledTimes(2));
+    // Detail loads once on open, once for the player's episode list,
+    // and once more when returning from playback.
+    await waitFor(() => expect(api.getTitleDetail).toHaveBeenCalledTimes(3));
 
     await user.click(
       within(returned).getByRole("button", { name: "Close details" }),
     );
-    await user.click(await screen.findByRole("button", { name: /^▶ Play$/ }));
+    await user.click(await screen.findByRole("button", { name: "Play" }));
     const quickPlayer = await screen.findByRole("dialog", {
       name: /playing sample show/i,
     });
@@ -731,6 +734,172 @@ describe("conversational Home", () => {
       within(results).getByRole("button", { name: /add to library/i }),
     );
     expect(api.addToLibrary).toHaveBeenCalledWith("default", title.id);
+  });
+
+  it("starts each main search in a fresh session and keeps refinements in the floating chat", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    const response = (sessionId: string, reply: string) => ({
+      sessionId,
+      mode: "live" as const,
+      stage: "completed" as const,
+      reply,
+      bestMatch: { title, reason: "A validated match." },
+      available: [],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+    vi.mocked(api.discover)
+      .mockResolvedValueOnce(
+        response("session-one", "Is this what you had in mind?"),
+      )
+      .mockResolvedValueOnce(
+        response(
+          "session-one",
+          "Here is a less spooky option. Is this better?",
+        ),
+      )
+      .mockResolvedValueOnce(
+        response("session-two", "A fresh shortlist. Is this right?"),
+      );
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(screen.getByLabelText(/ask streamerai/i), "an autumn film");
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+    expect(
+      await screen.findByRole("button", {
+        name: /is this what you had in mind/i,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      vi.mocked(api.discover).mock.calls[0]?.[0].sessionId,
+    ).toBeUndefined();
+
+    await user.click(
+      screen.getByRole("button", { name: /is this what you had in mind/i }),
+    );
+    const chat = screen.getByRole("complementary", { name: "StreamerAI chat" });
+    expect(
+      within(chat).getByText("Is this what you had in mind?"),
+    ).toBeInTheDocument();
+    await user.type(
+      within(chat).getByLabelText("Reply to StreamerAI"),
+      "Less spooky, please",
+    );
+    await user.click(within(chat).getByRole("button", { name: "Send" }));
+    expect(
+      await within(chat).findByText(
+        "Here is a less spooky option. Is this better?",
+      ),
+    ).toBeInTheDocument();
+    expect(vi.mocked(api.discover).mock.calls[1]?.[0]).toMatchObject({
+      sessionId: "session-one",
+      message: "Less spooky, please",
+    });
+
+    await user.clear(screen.getByLabelText(/ask streamerai/i));
+    await user.type(screen.getByLabelText(/ask streamerai/i), "a space comedy");
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(3));
+    expect(
+      vi.mocked(api.discover).mock.calls[2]?.[0].sessionId,
+    ).toBeUndefined();
+    expect(
+      await screen.findByRole("button", {
+        name: /is this what you had in mind/i,
+      }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: /is this what you had in mind/i }),
+    );
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "StreamerAI chat" }),
+      ).queryByText("Less spooky, please"),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["Home", "Home"],
+    ["logo", "StreamerAI home"],
+  ])(
+    "returns to a clean Home when clicking the %s button",
+    async (_label, buttonName) => {
+      const user = userEvent.setup();
+      const api = createApi();
+      const scroll = vi.spyOn(window, "scrollTo");
+      vi.mocked(api.discover).mockResolvedValueOnce({
+        sessionId: "session-before-home",
+        mode: "live",
+        stage: "completed",
+        reply: "A shortlist. Is this what you had in mind?",
+        bestMatch: null,
+        available: [],
+        unavailable: [],
+        unverified: [],
+        warnings: [],
+        completedAt: "2026-09-27T12:00:00.000Z",
+      });
+      window.history.replaceState({}, "", "/");
+      render(<App api={api} />);
+
+      await user.click(await screen.findByRole("button", { name: /alex/i }));
+      await user.type(
+        screen.getByLabelText(/ask streamerai/i),
+        "an autumn film",
+      );
+      await user.click(screen.getByRole("button", { name: "Find something" }));
+      expect(
+        await screen.findByRole("region", { name: /a considered shortlist/i }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("complementary", { name: "StreamerAI chat" }),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: buttonName }));
+      expect(
+        screen.queryByRole("region", { name: /a considered shortlist/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("complementary", { name: "StreamerAI chat" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/ask streamerai/i)).toHaveValue("");
+      expect(scroll).toHaveBeenLastCalledWith({ top: 0, behavior: "auto" });
+      scroll.mockRestore();
+    },
+  );
+
+  it("aborts a pending discovery when Home is clicked", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.discover).mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(screen.getByLabelText(/ask streamerai/i), "an autumn film");
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+    expect(
+      screen.getByRole("button", { name: "Stop search" }),
+    ).toBeInTheDocument();
+    const signal = vi.mocked(api.discover).mock.calls[0]?.[1];
+    await user.click(screen.getByRole("button", { name: "Home" }));
+
+    expect(signal?.aborted).toBe(true);
+    expect(api.cancelDiscovery).toHaveBeenCalledWith(
+      "default",
+      vi.mocked(api.discover).mock.calls[0]?.[0].idempotencyKey,
+    );
+    expect(
+      screen.queryByRole("region", { name: "Discovery progress" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/ask streamerai/i)).toHaveValue("");
   });
 
   it("shows a wake-up notice only when the live local model is not resident", async () => {
@@ -809,6 +978,13 @@ describe("conversational Home", () => {
   it("stops discovery and ignores a response that arrives after cancellation", async () => {
     const user = userEvent.setup();
     const api = createApi();
+    let confirmStop!: () => void;
+    vi.mocked(api.cancelDiscovery).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          confirmStop = resolve;
+        }),
+    );
     let resolveDiscovery:
       | ((value: Awaited<ReturnType<StreamerApi["discover"]>>) => void)
       | undefined;
@@ -830,6 +1006,8 @@ describe("conversational Home", () => {
 
     const stop = screen.getByRole("button", { name: "Stop search" });
     expect(stop).toHaveClass("is-searching");
+    expect(stop.querySelector(".composer-submit__gleam")).toBeInTheDocument();
+    expect(stop).not.toHaveClass("is-launching");
     expect(
       screen.getByRole("region", { name: "Discovery progress" }),
     ).toBeInTheDocument();
@@ -837,9 +1015,30 @@ describe("conversational Home", () => {
     expect(signal?.aborted).toBe(false);
     await user.click(stop);
     expect(signal?.aborted).toBe(true);
+    expect(api.cancelDiscovery).toHaveBeenCalledWith(
+      "default",
+      vi.mocked(api.discover).mock.calls[0]?.[0].idempotencyKey,
+    );
     expect(
-      screen.getByRole("button", { name: "Find something" }),
-    ).toBeEnabled();
+      screen.getByRole("button", { name: "Stopping search" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Stopping search" })).toHaveClass(
+      "is-stopping",
+    );
+    expect(
+      within(
+        screen.getByRole("region", { name: "Discovery progress" }),
+      ).getByText("Stopping search…"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Find something" }),
+    ).not.toBeInTheDocument();
+    confirmStop();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Find something" }),
+      ).toBeEnabled(),
+    );
 
     resolveDiscovery?.({
       sessionId: "late-session",
@@ -867,6 +1066,36 @@ describe("conversational Home", () => {
     expect(
       vi.mocked(api.discover).mock.calls[1]?.[0].sessionId,
     ).toBeUndefined();
+  });
+
+  it("reports when the server cannot confirm a stopped search", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.discover).mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+    vi.mocked(api.cancelDiscovery).mockRejectedValueOnce(
+      new Error("Connection lost"),
+    );
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(
+      screen.getByLabelText(/ask streamerai/i),
+      "a gentle comedy",
+    );
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+    const signal = vi.mocked(api.discover).mock.calls[0]?.[1];
+    await user.click(screen.getByRole("button", { name: "Stop search" }));
+
+    expect(signal?.aborted).toBe(true);
+    expect(
+      await screen.findByText(/could not confirm that the search stopped/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Find something" }),
+    ).toBeEnabled();
   });
 
   it("automatically checks a live title and enables Play when verified", async () => {
@@ -922,7 +1151,12 @@ describe("conversational Home", () => {
     resolveCheck();
     const play = await screen.findByRole("button", { name: /play/i });
     expect(play).toBeEnabled();
-    expect(screen.getByText("JAP (!)")).toBeInTheDocument();
+    const languages = screen.getByLabelText(
+      "Audio languages: JAP; no preferred audio or subtitles",
+    );
+    expect(within(languages).getByText("JAP")).toHaveClass(
+      "title-card__language-badge--warning",
+    );
     await user.click(play);
     expect(
       await screen.findByRole("dialog", { name: /playing the lake house/i }),

@@ -35,6 +35,7 @@ empty JSON content type.
 | --- | --- | --- |
 | `GET` | `/home?profileId=default` | Populated Home sections for one profile. |
 | `POST` | `/discovery/sessions` | Run or continue conversational discovery. |
+| `POST` | `/discovery/cancel` | Cancel a running discovery by `profileId` and `idempotencyKey`. |
 
 Discovery request:
 
@@ -58,6 +59,18 @@ Sessions and messages are durable SQLite records. `idempotencyKey` is scoped to
 the profile: replaying the same body returns the stored response, while reusing
 the key for different input returns `IDEMPOTENCY_CONFLICT`. A supplied unknown
 or closed `sessionId` returns `DISCOVERY_SESSION_NOT_FOUND`.
+
+The Home search deliberately omits `sessionId` on every submission, creating
+a fresh conversation. The floating result chat sends the current response's
+`sessionId` with each follow-up, so objections refine that shortlist without
+mixing unrelated searches. Each successful live reply ends with a question
+inviting feedback. Follow-up turns carry prior validated title names in the
+agent context; metadata and availability are checked again before the updated
+shortlist is shown. Cancelling a pending Home search discards its response on
+the client and sends a separate cancellation request to the server. The server
+aborts its active provider signal, including Ollama generation and in-flight
+TMDB/Webshare calls. A cancellation that arrives before the discovery request
+is registered is remembered briefly, so that request cannot start afterward.
 
 ## Library, History and playback
 

@@ -160,6 +160,7 @@ export class TmdbMetadataProvider implements MetadataProvider {
         "movie",
         "trending",
         tmdbLanguage(context.locale),
+        context.signal,
       );
       return ProviderHealthSchema.parse({
         status: "healthy",
@@ -184,7 +185,7 @@ export class TmdbMetadataProvider implements MetadataProvider {
 
   async search(
     rawQuery: MetadataSearchQuery,
-    _context: ProviderContext,
+    context: ProviderContext,
   ): Promise<MetadataCandidate[]> {
     const query = MetadataSearchQuerySchema.parse(rawQuery);
     let creditedTitles: Set<string> | null = null;
@@ -193,6 +194,7 @@ export class TmdbMetadataProvider implements MetadataProvider {
         await this.#client.searchPerson(
           query.person,
           tmdbLanguage(query.locale),
+          context.signal,
         ),
       );
       const requestedPerson = normalizedIdentity(query.person);
@@ -207,6 +209,7 @@ export class TmdbMetadataProvider implements MetadataProvider {
         await this.#client.getPersonCombinedCredits(
           positiveInteger(person.id),
           tmdbLanguage(query.locale),
+          context.signal,
         ),
       );
       creditedTitles = new Set<string>();
@@ -230,16 +233,22 @@ export class TmdbMetadataProvider implements MetadataProvider {
       kinds.map(async (kind) => {
         const response =
           kind === "movie"
-            ? await this.#client.searchMovie({
-                query: query.query,
-                ...(query.year === null ? {} : { year: query.year }),
-                language: tmdbLanguage(query.locale),
-              })
-            : await this.#client.searchSeries({
-                query: query.query,
-                ...(query.year === null ? {} : { year: query.year }),
-                language: tmdbLanguage(query.locale),
-              });
+            ? await this.#client.searchMovie(
+                {
+                  query: query.query,
+                  ...(query.year === null ? {} : { year: query.year }),
+                  language: tmdbLanguage(query.locale),
+                },
+                context.signal,
+              )
+            : await this.#client.searchSeries(
+                {
+                  query: query.query,
+                  ...(query.year === null ? {} : { year: query.year }),
+                  language: tmdbLanguage(query.locale),
+                },
+                context.signal,
+              );
         return results(response).flatMap((item): MetadataCandidate[] => {
           if (!Number.isInteger(item.id)) return [];
           if (
@@ -286,8 +295,16 @@ export class TmdbMetadataProvider implements MetadataProvider {
     const id = positiveInteger(Number(ref.externalId));
     const body = object(
       ref.entityType === "movie"
-        ? await this.#client.getMovie(id, tmdbLanguage(context.locale))
-        : await this.#client.getSeries(id, tmdbLanguage(context.locale)),
+        ? await this.#client.getMovie(
+            id,
+            tmdbLanguage(context.locale),
+            context.signal,
+          )
+        : await this.#client.getSeries(
+            id,
+            tmdbLanguage(context.locale),
+            context.signal,
+          ),
     );
     const retrievedAt = this.#now().toISOString();
     const source = provenance(retrievedAt);
@@ -341,7 +358,11 @@ export class TmdbMetadataProvider implements MetadataProvider {
     }
     const seriesId = positiveInteger(Number(ref.externalId));
     const details = object(
-      await this.#client.getSeries(seriesId, tmdbLanguage(context.locale)),
+      await this.#client.getSeries(
+        seriesId,
+        tmdbLanguage(context.locale),
+        context.signal,
+      ),
     );
     if (!Array.isArray(details.seasons)) {
       throw new ProviderRequestError("tmdb", "invalid-response", true);
@@ -357,6 +378,7 @@ export class TmdbMetadataProvider implements MetadataProvider {
           seriesId,
           seasonNumber,
           tmdbLanguage(context.locale),
+          context.signal,
         ),
       );
       const episodes = Array.isArray(body.episodes)
@@ -413,8 +435,16 @@ export class TmdbMetadataProvider implements MetadataProvider {
     const id = positiveInteger(Number(ref.externalId));
     const body = object(
       ref.entityType === "movie"
-        ? await this.#client.getMovie(id, tmdbLanguage(context.locale))
-        : await this.#client.getSeries(id, tmdbLanguage(context.locale)),
+        ? await this.#client.getMovie(
+            id,
+            tmdbLanguage(context.locale),
+            context.signal,
+          )
+        : await this.#client.getSeries(
+            id,
+            tmdbLanguage(context.locale),
+            context.signal,
+          ),
     );
     if (typeof body.vote_average !== "number") return [];
     return [
@@ -430,7 +460,7 @@ export class TmdbMetadataProvider implements MetadataProvider {
 
   async getFeed(
     rawRequest: DiscoveryFeedRequest,
-    _context: ProviderContext,
+    context: ProviderContext,
   ): Promise<MetadataCandidate[]> {
     const request = DiscoveryFeedRequestSchema.parse(rawRequest);
     const kinds =
@@ -445,7 +475,12 @@ export class TmdbMetadataProvider implements MetadataProvider {
     const candidates = await Promise.all(
       kinds.map(async (kind) =>
         results(
-          await this.#client.getFeed(kind, feed, tmdbLanguage(request.locale)),
+          await this.#client.getFeed(
+            kind,
+            feed,
+            tmdbLanguage(request.locale),
+            context.signal,
+          ),
         ).flatMap((item): MetadataCandidate[] => {
           if (!Number.isInteger(item.id)) return [];
           const title = optionalString(item.title ?? item.name);

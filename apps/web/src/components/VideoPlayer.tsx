@@ -421,6 +421,12 @@ export function VideoPlayer({
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) togglePlayback();
+        return;
+      }
       if (event.key === "Escape") {
         if (document.fullscreenElement) return;
         closePlayer();
@@ -444,15 +450,9 @@ export function VideoPlayer({
         }
         return;
       }
-      if (event.code !== "Space") return;
-      const target = event.target as HTMLElement | null;
-      const interactive = target?.closest("button, input, select, textarea, a");
-      if (interactive && !event.altKey) return;
-      event.preventDefault();
-      togglePlayback();
     };
-    window.addEventListener("keydown", keydown);
-    return () => window.removeEventListener("keydown", keydown);
+    window.addEventListener("keydown", keydown, true);
+    return () => window.removeEventListener("keydown", keydown, true);
   });
 
   const duration = info?.durationSeconds ?? 0;
@@ -703,7 +703,7 @@ export function VideoPlayer({
           </div>
           <button
             type="button"
-            className="video-player__icon-button"
+            className="video-player__icon-button video-player__close-button close-icon-button"
             onClick={closePlayer}
             aria-label="Close player"
           >

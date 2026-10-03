@@ -72,6 +72,9 @@ function discoveryRequestHash(request: DiscoveryRequest): string {
  * particular agent implementation.
  */
 export class StreamerCore {
+  private readonly activeDiscoveries = new Map<string, AbortController>();
+  private readonly cancelledDiscoveries = new Map<string, number>();
+
   constructor(
     private readonly database: StreamerDatabase,
     private readonly now: () => Date,
@@ -228,9 +231,39 @@ export class StreamerCore {
     });
   }
 
-  async discover(rawRequest: DiscoveryRequest): Promise<DiscoveryResponse> {
+  cancelDiscovery(profileId: string, idempotencyKey: string): boolean {
+    this.requireProfile(profileId);
+    const claim = this.database.idempotency.get(
+      `discovery:${profileId}`,
+      idempotencyKey,
+    );
+    if (claim?.state === "completed" || claim?.state === "failed") return false;
+    const key = `${profileId}\u0000${idempotencyKey}`;
+    const now = Date.now();
+    for (const [entry, expiresAt] of this.cancelledDiscoveries) {
+      if (expiresAt <= now) this.cancelledDiscoveries.delete(entry);
+    }
+    this.cancelledDiscoveries.set(key, now + 60_000);
+    if (this.cancelledDiscoveries.size > 500) {
+      this.cancelledDiscoveries.delete(
+        this.cancelledDiscoveries.keys().next().value!,
+      );
+    }
+    const controller = this.activeDiscoveries.get(key);
+    controller?.abort();
+    return controller !== undefined;
+  }
+
+  async discover(
+    rawRequest: DiscoveryRequest,
+    externalSignal?: AbortSignal,
+  ): Promise<DiscoveryResponse> {
     const request = DiscoveryRequestSchema.parse(rawRequest);
     this.requireProfile(request.profileId);
+    const cancellationKey = `${request.profileId}\u0000${request.idempotencyKey}`;
+    if (this.cancelledDiscoveries.has(cancellationKey)) {
+      throw new DiscoveryCancelledError();
+    }
     const scope = `discovery:${request.profileId}`;
     const requestHash = discoveryRequestHash(request);
     const claim = this.database.idempotency.claim<DiscoveryResponse>({
@@ -254,7 +287,20 @@ export class StreamerCore {
       throw new PreviousRequestFailedError(request.idempotencyKey);
     }
 
+    const controller = new AbortController();
+    const abortFromExternal = () => controller.abort();
+    externalSignal?.addEventListener("abort", abortFromExternal, {
+      once: true,
+    });
+    if (
+      externalSignal?.aborted ||
+      this.cancelledDiscoveries.has(cancellationKey)
+    ) {
+      controller.abort();
+    }
+    this.activeDiscoveries.set(cancellationKey, controller);
     try {
+      controller.signal.throwIfAborted();
       const sessionId = request.sessionId ?? randomUUID();
       const existingSession = this.database.discoverySessions.get(sessionId);
       if (existingSession === null) {
@@ -291,6 +337,7 @@ export class StreamerCore {
           this.now().toISOString(),
           {
             sessionId,
+            signal: controller.signal,
             messages: messages.map((message) => ({
               role: message.role,
               content: message.content,
@@ -299,6 +346,7 @@ export class StreamerCore {
           },
         ),
       );
+      controller.signal.throwIfAborted();
       if (
         providerResult.sessionId !== sessionId ||
         providerResult.mode !== this.contentProvider.mode
@@ -316,6 +364,7 @@ export class StreamerCore {
         ...providerResult.unverified,
       ];
       for (const item of ranked) {
+        controller.signal.throwIfAborted();
         this.database.titles.upsert(storageTitle(item.title));
       }
 
@@ -333,7 +382,9 @@ export class StreamerCore {
         unavailable: providerResult.unavailable.map(decorateRanked),
         unverified: providerResult.unverified.map(decorateRanked),
       });
+      controller.signal.throwIfAborted();
       this.database.transaction(() => {
+        controller.signal.throwIfAborted();
         this.database.discoverySessions.appendMessage({
           id: randomUUID(),
           sessionId,
@@ -341,6 +392,7 @@ export class StreamerCore {
           content: {
             reply: response.reply,
             titleIds: ranked.map((item) => item.title.id),
+            titles: ranked.map((item) => item.title.title),
             stage: response.stage,
           },
           requestId: request.idempotencyKey,
@@ -355,17 +407,23 @@ export class StreamerCore {
       });
       return response;
     } catch (error) {
+      const cancelled = controller.signal.aborted;
       this.failDiscoveryClaimIfPending(
         scope,
         request,
         requestHash,
-        error instanceof DiscoverySessionNotFoundError
-          ? "SESSION_NOT_FOUND"
-          : error instanceof DiscoverySessionClosedError
-            ? "SESSION_CLOSED"
-            : "DISCOVERY_FAILED",
+        cancelled
+          ? "DISCOVERY_CANCELLED"
+          : error instanceof DiscoverySessionNotFoundError
+            ? "SESSION_NOT_FOUND"
+            : error instanceof DiscoverySessionClosedError
+              ? "SESSION_CLOSED"
+              : "DISCOVERY_FAILED",
       );
-      throw error;
+      throw cancelled ? new DiscoveryCancelledError() : error;
+    } finally {
+      externalSignal?.removeEventListener("abort", abortFromExternal);
+      this.activeDiscoveries.delete(cancellationKey);
     }
   }
 
@@ -769,6 +827,13 @@ export class StreamerCore {
     if (record?.state === "in-progress") {
       this.failDiscoveryClaim(scope, request, requestHash, errorCode);
     }
+  }
+}
+
+export class DiscoveryCancelledError extends Error {
+  constructor() {
+    super("Discovery was cancelled.");
+    this.name = "DiscoveryCancelledError";
   }
 }
 

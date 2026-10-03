@@ -10,7 +10,7 @@ import type { PlaybackCheckState } from "./usePlaybackChecks";
 let cardHoverAudioContext: AudioContext | null = null;
 let lastCardHoverTickAt = 0;
 
-function playCardHoverTick() {
+export function playCardHoverTick() {
   if (
     typeof window === "undefined" ||
     typeof window.AudioContext !== "function"
@@ -65,11 +65,16 @@ interface TitleCardProps {
   playbackCheck?: PlaybackCheckState;
 }
 
+function ratingPercent(item: CatalogTitle): number | null {
+  const rating = item.ratings[0];
+  return rating ? Math.round((rating.value / rating.scale) * 100) : null;
+}
+
 function ratingLabel(item: CatalogTitle): string {
   const rating = item.ratings[0];
-  if (!rating) return "Rating pending";
-  const normalized = Math.round((rating.value / rating.scale) * 100);
-  return `${rating.source} ${normalized}%`;
+  const percent = ratingPercent(item);
+  if (!rating || percent === null) return "Rating pending";
+  return `${rating.source} ${percent}%`;
 }
 
 function availabilityLabel(item: CatalogTitle): string {
@@ -196,8 +201,29 @@ export function TitleCard({
       onCheck(item, item.kind === "series" ? defaultEpisode : undefined);
   }, [item, onCheck, playbackEnabled, defaultEpisode]);
 
+  const score = ratingPercent(item);
+  const ratingCardClass =
+    score === null
+      ? ""
+      : score >= 90
+        ? "title-card--rating-excellent"
+        : score >= 80
+          ? "title-card--rating-good"
+          : "";
+  const ratingBadgeClass =
+    score === null
+      ? ""
+      : score >= 90
+        ? "title-card__rating--excellent"
+        : score >= 80
+          ? "title-card__rating--good"
+          : score < 60
+            ? "title-card__rating--low"
+            : "";
+
   const classNames = [
     "title-card",
+    ratingCardClass,
     onOpen ? "title-card--openable" : "",
     hero ? "title-card--hero" : "",
     displayAvailability === "unavailable" ? "title-card--unavailable" : "",
@@ -263,7 +289,17 @@ export function TitleCard({
             {item.kind === "series" ? "Series" : "Movie"}
             {item.year ? ` · ${item.year}` : ""}
           </span>
-          <span>{ratingLabel(item)}</span>
+          <span
+            className={`title-card__rating ${ratingBadgeClass}`}
+            aria-label={score !== null && score < 60 ? `${ratingLabel(item)}, low rating` : undefined}
+          >
+            {ratingLabel(item)}
+            {score !== null && score < 60 && (
+              <b className="title-card__rating-warning" aria-hidden="true">
+                !
+              </b>
+            )}
+          </span>
           {item.matchPercent !== null && (
             <span>Match {item.matchPercent}%</span>
           )}
@@ -346,6 +382,9 @@ export function TitleCard({
             <button
               className={`button button--${checkStatus === "failed" ? "secondary" : "primary"} button--compact${checkStatus === "ready" ? " button--play-action" : ""}${checkStatus === "checking" || pendingAction === "play" ? " button--checking" : ""}`}
               type="button"
+              onFocus={() => {
+                if (checkStatus === "ready") playCardHoverTick();
+              }}
               disabled={
                 pendingAction !== undefined || checkStatus === "checking"
               }
@@ -373,6 +412,9 @@ export function TitleCard({
                     : ""
                 }`}
                 type="button"
+                onFocus={() => {
+                  if (checkStatus === "ready") playCardHoverTick();
+                }}
                 onClick={() =>
                   checkStatus === "failed" ? onCheck?.(item) : onPlay(item)
                 }

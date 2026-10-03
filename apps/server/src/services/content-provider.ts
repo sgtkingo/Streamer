@@ -63,6 +63,7 @@ export interface DiscoveryConversationMessage {
 export interface DiscoveryConversationContext {
   readonly sessionId: string;
   readonly messages: readonly DiscoveryConversationMessage[];
+  readonly signal?: AbortSignal;
 }
 
 const format = {
@@ -297,7 +298,7 @@ export class PreviewContentProvider implements StreamerContentProvider {
       mode: "preview",
       stage: "completed",
       reply:
-        "Here is a provider-neutral preview of the validated result layout. Connect live providers to replace preview records.",
+        "Here is a provider-neutral preview of the validated result layout. Connect live providers to replace preview records. Is this what you had in mind? Tell me what to change.",
       bestMatch: {
         title: { ...lead, matchPercent: 94 },
         reason: "Closest match to the mood, people and format in your request.",

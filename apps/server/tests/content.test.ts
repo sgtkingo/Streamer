@@ -3,6 +3,7 @@ import {
   CatalogTitleSchema,
   DiscoveryResponseSchema,
   HomeFeedSchema,
+  type DiscoveryResponse,
 } from "@streamer-ai/contracts";
 import {
   createApp,
@@ -95,6 +96,124 @@ describe("provider-neutral content API", () => {
     expect(conflict.json()).toMatchObject({
       error: { code: "IDEMPOTENCY_CONFLICT" },
     });
+  });
+
+  it("cancels an in-flight discovery on the server and aborts its provider signal", async () => {
+    let started!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let providerAborted = false;
+    const contentProvider: StreamerContentProvider = {
+      id: "cancellable-test-provider",
+      mode: "live",
+      bootstrapTitles: () => [],
+      buildHome: ({ profileId, generatedAt }) =>
+        HomeFeedSchema.parse({
+          profileId,
+          generatedAt,
+          mode: "live",
+          sections: [],
+        }),
+      discover: async (_request, _completedAt, conversation) => {
+        started();
+        return new Promise<DiscoveryResponse>((_resolve, reject) => {
+          conversation?.signal?.addEventListener(
+            "abort",
+            () => {
+              providerAborted = true;
+              reject(new Error("provider aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const instance = createApp({
+      environment: "test",
+      logger: false,
+      fetch: unusedFetch,
+      contentProvider,
+      now: () => new Date("2026-09-27T12:00:00.000Z"),
+    });
+    apps.push(instance);
+    const discovery = instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/sessions",
+      payload: {
+        profileId: "default",
+        message: "A film to cancel",
+        idempotencyKey: "cancel-request-0001",
+      },
+    });
+    await providerStarted;
+    const cancel = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/cancel",
+      payload: { profileId: "default", idempotencyKey: "cancel-request-0001" },
+    });
+    const response = await discovery;
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json()).toEqual({ cancelled: true });
+    expect(providerAborted).toBe(true);
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: { code: "DISCOVERY_CANCELLED" },
+    });
+  });
+
+  it("honours cancellation that arrives before discovery starts", async () => {
+    const instance = app();
+    const cancelled = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/cancel",
+      payload: { profileId: "default", idempotencyKey: "early-cancel-0001" },
+    });
+    const discovery = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/sessions",
+      payload: {
+        profileId: "default",
+        message: "A film never to start",
+        idempotencyKey: "early-cancel-0001",
+      },
+    });
+    expect(cancelled.json()).toEqual({ cancelled: false });
+    expect(discovery.statusCode).toBe(409);
+    expect(discovery.json()).toMatchObject({
+      error: { code: "DISCOVERY_CANCELLED" },
+    });
+  });
+
+  it("does not invalidate an already completed discovery when cancellation arrives late", async () => {
+    const instance = app();
+    const payload = {
+      profileId: "default",
+      message: "A completed film search",
+      idempotencyKey: "late-cancel-0001",
+    };
+    const first = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/sessions",
+      payload,
+    });
+    const cancel = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/cancel",
+      payload: {
+        profileId: payload.profileId,
+        idempotencyKey: payload.idempotencyKey,
+      },
+    });
+    const replay = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/sessions",
+      payload,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(cancel.json()).toEqual({ cancelled: false });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(first.json());
   });
 
   it("keeps explicit saves but never records preview playback as History", async () => {

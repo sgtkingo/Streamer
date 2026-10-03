@@ -225,6 +225,7 @@ export class OllamaAgentProvider implements AgentProvider {
       ? AbortSignal.any([controller.signal, context.signal])
       : controller.signal;
     try {
+      signal.throwIfAborted();
       const response = await this.#fetch(`${this.#config.baseUrl}${path}`, {
         method: body === undefined ? "GET" : "POST",
         headers: {
@@ -237,6 +238,7 @@ export class OllamaAgentProvider implements AgentProvider {
       if (!response.ok)
         throw providerFailureForStatus("ollama", response.status);
       const text = await response.text();
+      signal.throwIfAborted();
       if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
         throw new ProviderRequestError("ollama", "invalid-response", true);
       }

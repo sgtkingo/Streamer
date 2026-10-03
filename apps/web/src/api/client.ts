@@ -94,6 +94,7 @@ export interface StreamerApi {
     request: DiscoveryRequest,
     signal?: AbortSignal,
   ): Promise<DiscoveryResponse>;
+  cancelDiscovery(profileId: string, idempotencyKey: string): Promise<void>;
   getLibrary(profileId: string): Promise<LibraryResponse>;
   addToLibrary(profileId: string, titleId: string): Promise<LibraryResponse>;
   removeFromLibrary(profileId: string, titleId: string): Promise<void>;
@@ -441,6 +442,12 @@ export const apiClient: StreamerApi = {
       method: "POST",
       body: JSON.stringify(payload),
       signal,
+    }),
+  cancelDiscovery: (profileId, idempotencyKey) =>
+    request<void>("/discovery/cancel", {
+      method: "POST",
+      body: JSON.stringify({ profileId, idempotencyKey }),
+      signal: AbortSignal.timeout(10_000),
     }),
   getLibrary: (profileId) =>
     request<LibraryResponse>(
