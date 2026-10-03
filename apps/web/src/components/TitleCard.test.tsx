@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DEFAULT_PLAYBACK_PREFERENCES } from "@streamer-ai/contracts";
 import type { CatalogTitle } from "@streamer-ai/contracts";
@@ -53,8 +53,8 @@ const movie: CatalogTitle = {
   progressPercent: null,
 };
 
-describe("TitleCard source picker", () => {
-  it("keeps Play on the recommended file and lets the user choose one alternative", async () => {
+describe("TitleCard sources", () => {
+  it("shows the source count without a source picker", async () => {
     const user = userEvent.setup();
     const onPlay = vi.fn();
     render(
@@ -67,16 +67,8 @@ describe("TitleCard source picker", () => {
       />,
     );
     expect(screen.getByText("2 sources")).toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: "More sources for Example" }),
-    );
-    const menu = screen.getByRole("group", { name: "Sources for Example" });
-    expect(within(menu).getByText("Recommended")).toBeInTheDocument();
-    expect(within(menu).getByText("720p · EN · Sub CS")).toBeInTheDocument();
-    await user.click(within(menu).getByRole("button", { name: /Source 2/ }));
-    expect(onPlay).toHaveBeenCalledWith(movie, undefined, sources[1]!.id);
     expect(
-      screen.queryByRole("group", { name: "Sources for Example" }),
+      screen.queryByRole("button", { name: "More sources for Example" }),
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Play/i }));
     expect(onPlay).toHaveBeenLastCalledWith(movie);

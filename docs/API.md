@@ -34,8 +34,9 @@ empty JSON content type.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/home?profileId=default` | Populated Home sections for one profile. |
+| `POST` | `/discovery/fast` | Bounded metadata/media lookup without an agent; returns provisional validated titles for a shared session. |
 | `POST` | `/discovery/sessions` | Run or continue conversational discovery. |
-| `POST` | `/discovery/cancel` | Cancel a running discovery by `profileId` and `idempotencyKey`. |
+| `POST` | `/discovery/cancel` | Cancel the deep discovery request by `profileId` and `idempotencyKey`; a parallel fast request continues. |
 
 Discovery request:
 
@@ -44,9 +45,14 @@ Discovery request:
   "profileId": "default",
   "message": "I want an autumn movie with Sandra Bullock",
   "idempotencyKey": "client-generated-stable-key",
-  "sessionId": "optional-existing-session"
+  "sessionId": "shared-session-for-parallel-initial-search",
+  "createSession": true
 }
 ```
+
+The initial fast request uses the same `sessionId` and `idempotencyKey` but
+omits `createSession`. Chat follow-ups use the existing session and omit
+`createSession`.
 
 A completed response contains `mode`, `bestMatch`, `available`, `unavailable`
 and `unverified` groups. `unknown` availability belongs only in `unverified`;
@@ -56,21 +62,43 @@ playable. The default coordinator returns `mode: "preview"`, an explicit
 warning, and no Play action.
 
 Sessions and messages are durable SQLite records. `idempotencyKey` is scoped to
-the profile: replaying the same body returns the stored response, while reusing
-the key for different input returns `IDEMPOTENCY_CONFLICT`. A supplied unknown
-or closed `sessionId` returns `DISCOVERY_SESSION_NOT_FOUND`.
+the profile for the deep request: replaying the same body returns its stored
+response, while reusing the key for different input returns
+`IDEMPOTENCY_CONFLICT`. A supplied unknown or closed `sessionId` returns
+`DISCOVERY_SESSION_NOT_FOUND` unless an initial parallel request explicitly
+sets `createSession: true`.
 
-The Home search deliberately omits `sessionId` on every submission, creating
-a fresh conversation. The floating result chat sends the current response's
-`sessionId` with each follow-up, so objections refine that shortlist without
-mixing unrelated searches. Each successful live reply ends with a question
-inviting feedback. Follow-up turns carry prior validated title names in the
-agent context; metadata and availability are checked again before the updated
-shortlist is shown. Cancelling a pending Home search discards its response on
-the client and sends a separate cancellation request to the server. The server
-aborts its active provider signal, including Ollama generation and in-flight
-TMDB/Webshare calls. A cancellation that arrives before the discovery request
-is registered is remembered briefly, so that request cannot start afterward.
+Live Home searches start `POST /discovery/fast` and `POST /discovery/sessions`
+in parallel with the same client-generated `sessionId`, message and request
+key. The fast route uses only metadata/media adapters, persists newly validated
+titles, and does not invoke Ollama. Its bounded candidate shortlist passes
+through the same source-matching and format validation as Deep. Media lookup
+tries original and localized title variants, with and without release year,
+and inspects up to 12 file candidates per query until it finds three verified
+sources. If the provider search limit is reached or file inspection is
+truncated without a usable source, availability is `unknown`; only exhausted
+bounded queries without a match are `unavailable`. The deep request sets
+`createSession: true`; either route may create the shared session first, while
+the initial user message is stored only once. The client merges results by
+canonical ID, retaining verified streams and alternate sources from either
+lane. An unambiguous exact-title Fast hit takes priority over an unrelated
+model suggestion, while contextual Deep rankings can improve broader queries.
+The merged response contains each title once. Later successful `playback/check`
+calls promote tiles into the playable group for the current view rather than
+leaving them in "Found, not currently available". This does not rewrite the
+stored discovery response or canonical title. A pending check remains unknown.
+Stop cancels only the deep request; fast results already shown (or still in
+flight) remain usable.
+The floating result chat sends the current session's ID with each follow-up,
+so objections refine that shortlist without mixing unrelated searches. A
+still-pending initial Fast request is discarded when the user starts a chat
+refinement, so its late response cannot replace newer conversation results. A fast
+reply is retained in the conversation for follow-up context; validated Fast
+matches can also inform Deep when timing permits, but correct merging never
+depends on that race. Each successful deep reply
+ends with a question inviting feedback. A cancellation that arrives before
+the deep request is registered is remembered briefly, so it cannot start
+afterward.
 
 ## Library, History and playback
 
@@ -118,6 +146,12 @@ position. The server refreshes the private provider link for later media
 requests, so an expired direct link does not break a seek. Local subtitle files
 are converted to WebVTT in browser memory.
 Only text-based embedded subtitles can be extracted; bitmap tracks are omitted.
+
+`check` reports current playback readiness and optional track languages, not
+a replacement catalog title. The client may use a successful check to
+reclassify a tile in the visible search result; durable availability and source
+metadata are still updated through validated discovery/upsert. `prepare`
+performs a fresh source check even when the earlier tile check succeeded.
 
 Live title objects may include `sources`: inspected provider files with stable
 32-character IDs, provider candidate references, quality/language hints and

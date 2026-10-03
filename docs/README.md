@@ -33,9 +33,11 @@ The repository contains a working local vertical slice:
 - provider-neutral contracts, family registries, TMDB normalization, portable
   encrypted secret storage and a Webshare authentication/media/ticket adapter.
 
-Production now uses `LiveContentCoordinator`: Ollama proposes bounded
-candidates, TMDB validates canonical identity, ratings and explicitly named
-people, and Webshare deterministically verifies availability and formats. The
+Production now uses `LiveContentCoordinator`: a bounded API/similarity lane
+returns provisional validated titles without Ollama while the local agent
+explores the same request in parallel. TMDB validates canonical identity,
+ratings and explicitly named people; Webshare deterministically verifies
+availability and formats. The two lanes merge by canonical title ID. The
 preview provider remains a development/test fallback and cannot start
 playback. Real Webshare search and format inspection have passed; the final
 playback/Range/seek acceptance spike, subtitle retrieval, web search and

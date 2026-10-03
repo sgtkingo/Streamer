@@ -66,6 +66,48 @@ application code validates and merges it.
 
 ## 3. Pipeline and state machine
 
+Initial searches run as two parallel streams in one profile-scoped session:
+
+- **Fast**: metadata-provider API search and deterministic title similarity,
+  with a bounded trending-feed fallback. It never invokes the local model.
+  Canonical metadata is resolved first; the same media-provider matching and
+  source-validation rules used by Deep then run for its candidates. Metadata-
+  validated suggestions may appear while their availability is still being
+  checked, but they must not be labeled unavailable merely because a bounded
+  first pass found no file. Fast must not claim to understand mood, cast or
+  other intent it has not verified.
+- **Deep**: the existing local-agent search uses the user's language, context
+  and conversation. It validates every proposal through the same providers,
+  then adds or improves results as it finishes.
+
+Both streams use canonical title IDs and the UI shows each ID at most once.
+An exact, unambiguous title hit from Fast (for example, "Pan Tau") is strong
+evidence of the user's intent; a speculative Deep suggestion must not replace
+it just because the model assigns a higher match score. For open-ended mood or
+preference queries, Deep's contextual ranking can take precedence. Neither
+lane may demote a verified playable source to unknown or unavailable, and the
+union of validated alternate sources is retained. If Fast finishes early,
+its sanitized canonical matches may be given to Deep as evidence, not as an
+instruction or an availability claim; parallel execution means Deep must not
+depend on receiving them. Final fusion is deterministic regardless of which
+response arrives first. Stop cancels only Deep. Already returned Fast results
+remain usable and the shared conversation can still receive follow-up
+messages. A new main search always creates a fresh session; chat follow-ups
+remain in that session.
+
+Result tiles move between availability groups as later checks establish a
+different state. A metadata-only Fast hit may initially be shown as checking
+or unknown, then move to Best match or Available to stream after a matching
+source is verified. A successful just-in-time tile check may promote the tile
+for the current view without rewriting its persisted discovery response; a
+later discovery refresh still has to establish durable source/format metadata.
+A failed just-in-time playback probe may put the tile under "Found, not
+currently available" for the current view with a retry action; it must not
+rewrite canonical availability as a proven negative. An incomplete discovery
+provider search remains `unknown`.
+The visible reason must describe why the title fits the request or identify an
+exact title match, not expose an internal matching-algorithm placeholder.
+
 ```text
 USER_MESSAGE
     ↓
@@ -149,8 +191,8 @@ Availability states:
 |---|---|---|
 | `available` | At least one verified usable variant exists. | Color tile and Play action. |
 | `partial` | Series has some but not all expected episodes. | Compound tile with exact coverage. |
-| `unavailable` | Metadata exists but no admissible provider result was found. | Grayscale tile, no Play. |
-| `unknown` | Provider check failed or is stale beyond policy. | Do not claim unavailable; show Retry. |
+| `unavailable` | A completed, sufficiently broad media-provider search found no admissible result. | Grayscale tile, no Play. |
+| `unknown` | The check is pending, failed, stale or stopped before a conclusive result. | Do not claim unavailable; show Checking or Retry. |
 
 After the initial result appears, a series may continue a provider-neutral,
 episode-by-episode deep search in the background. The system may mark an
@@ -160,21 +202,30 @@ earlier verified episodes. Playback preparation must never substitute a
 different episode if the selected one becomes unavailable.
 
 Availability is rechecked immediately before playback. An expired cache or
-provider outage can never be converted into a factual `unavailable` state.
+provider outage can never be converted into a factual `unavailable` state. A
+short candidate budget that exhausts only the first few search hits is not
+proof of unavailability. If an asynchronous check discovers a usable source,
+the rendered result group must reflect that current verification immediately;
+the user must not see a playable tile stranded under "not currently available".
+The playback check is transient unless a complete canonical source/format
+record is available to persist through the discovery validation path.
 
 ### 3.5 Eligible set and ranking
 
 Only metadata-validated candidates enter ranking. Ranking uses:
 
 1. hard intent constraints;
-2. streaming tier and verified format compatibility;
-3. semantic match to mood/context;
-4. explicit profile preferences and feedback;
-5. source rating and popularity with bounded influence;
-6. novelty and diversity so one franchise/genre does not dominate.
+2. unambiguous explicit-title evidence from deterministic Fast search;
+3. streaming tier and verified format compatibility;
+4. semantic match to mood/context;
+5. explicit profile preferences and feedback;
+6. source rating and popularity with bounded influence;
+7. novelty and diversity so one franchise/genre does not dominate.
 
-If any streamable candidate satisfies the request, the Best match must be chosen
-from that set. Otherwise no playable hero is fabricated; the UI explains that
+If any streamable candidate satisfies the request, the Best match is chosen
+from that set, except that a direct-title query with its exact match still
+checking must not feature an unrelated suggestion as its hero. Otherwise no
+playable hero is fabricated; the UI explains that
 only validated unavailable matches were found.
 
 The model receives a bounded fact object for each candidate and returns canonical

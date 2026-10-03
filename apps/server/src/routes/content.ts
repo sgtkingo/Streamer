@@ -237,6 +237,7 @@ export function registerContentRoutes(
             profileId: { type: "string", minLength: 1, maxLength: 120 },
             message: { type: "string", minLength: 2, maxLength: 2_000 },
             sessionId: { type: "string", minLength: 1, maxLength: 120 },
+            createSession: { type: "boolean" },
             idempotencyKey: { type: "string", minLength: 8, maxLength: 120 },
           },
         },
@@ -250,6 +251,42 @@ export function registerContentRoutes(
       reply.raw.once("close", onClose);
       try {
         return await dependencies.core.discover(
+          DiscoveryRequestSchema.parse(request.body),
+          controller.signal,
+        );
+      } catch (error) {
+        return sendDomainError(reply, error);
+      } finally {
+        reply.raw.off("close", onClose);
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/discovery/fast",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["profileId", "message", "sessionId", "idempotencyKey"],
+          additionalProperties: false,
+          properties: {
+            profileId: { type: "string", minLength: 1, maxLength: 120 },
+            message: { type: "string", minLength: 2, maxLength: 2_000 },
+            sessionId: { type: "string", minLength: 1, maxLength: 120 },
+            idempotencyKey: { type: "string", minLength: 8, maxLength: 120 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const controller = new AbortController();
+      const onClose = () => {
+        if (!reply.raw.writableEnded) controller.abort();
+      };
+      reply.raw.once("close", onClose);
+      try {
+        return await dependencies.core.discoverFast(
           DiscoveryRequestSchema.parse(request.body),
           controller.signal,
         );

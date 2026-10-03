@@ -8,6 +8,10 @@ import type {
 } from "@streamer-ai/contracts";
 import type { PlaybackGrant, StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
+import {
+  groupDiscoveryResults,
+  mergeDiscoveryResults,
+} from "../discovery-merge";
 import { useToasts } from "./ToastProvider";
 import { TitleCard } from "./TitleCard";
 import { usePlaybackChecks } from "./usePlaybackChecks";
@@ -66,7 +70,10 @@ export function HomePage({
   const [chatSearching, setChatSearching] = useState(false);
   const [chatError, setChatError] = useState("");
   const [result, setResult] = useState<DiscoveryUiResponse | null>(null);
+  const [resultQuery, setResultQuery] = useState("");
+  const [resultPhase, setResultPhase] = useState<"quick" | "deep" | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [fastPending, setFastPending] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isWakingAgent, setIsWakingAgent] = useState(false);
   const [activeStage, setActiveStage] = useState(0);
@@ -82,6 +89,9 @@ export function HomePage({
   const requestCounter = useRef(0);
   const searchSerial = useRef(0);
   const activeSearch = useRef<AbortController | null>(null);
+  const activeFast = useRef<AbortController | null>(null);
+  const fastSerial = useRef(0);
+  const dualSearchingRef = useRef(false);
   const activeSearchKey = useRef<string | null>(null);
   const activeChat = useRef<AbortController | null>(null);
   const activeChatKey = useRef<string | null>(null);
@@ -151,15 +161,16 @@ export function HomePage({
 
   useEffect(() => {
     if (!isSearching || isStopping) return;
-    searchProgressRef.current?.scrollIntoView?.({
-      behavior: "smooth",
-      block: "center",
-    });
+    if (!result)
+      searchProgressRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "center",
+      });
     const interval = window.setInterval(() => {
       setActiveStage((stage) => Math.min(stage + 1, isWakingAgent ? 1 : 3));
     }, 650);
     return () => window.clearInterval(interval);
-  }, [isSearching, isStopping, isWakingAgent]);
+  }, [isSearching, isStopping, isWakingAgent, result]);
 
   useEffect(() => {
     if (!isSearching || !isWakingAgent) return;
@@ -190,6 +201,8 @@ export function HomePage({
   useEffect(
     () => () => {
       searchSerial.current += 1;
+      fastSerial.current += 1;
+      activeFast.current?.abort();
       if (activeSearchKey.current) {
         void api
           .cancelDiscovery(profileId, activeSearchKey.current)
@@ -217,7 +230,11 @@ export function HomePage({
     activeSearch.current?.abort();
     try {
       if (key) await api.cancelDiscovery(profileId, key);
-      setAnnouncement("Search stopped.");
+      setAnnouncement(
+        dualSearchingRef.current
+          ? "Deep search stopped. Quick matches remain."
+          : "Search stopped.",
+      );
     } catch {
       setError("Could not confirm that the search stopped. Please try again.");
       setAnnouncement("Search stop could not be confirmed.");
@@ -237,6 +254,12 @@ export function HomePage({
     const controller = new AbortController();
     const serial = ++searchSerial.current;
     const idempotencyKey = `${Date.now()}-${++requestCounter.current}`;
+    const turnId = requestCounter.current;
+    const fastTicket = ++fastSerial.current;
+    activeFast.current?.abort();
+    activeFast.current = null;
+    setFastPending(false);
+    dualSearchingRef.current = false;
     chatSerial.current += 1;
     if (activeChatKey.current) {
       void api
@@ -251,6 +274,10 @@ export function HomePage({
     setChatDraft("");
     setChatPendingMessage("");
     setChatError("");
+    setResult(null);
+    setResultQuery(message);
+    setResultPhase(null);
+    setTurns([]);
     activeSearch.current = controller;
     activeSearchKey.current = idempotencyKey;
     setIsSearching(true);
@@ -260,6 +287,117 @@ export function HomePage({
     setError("");
     setNotice("");
     setAnnouncement("StreamerAI is finding and validating titles.");
+    const discoverFast = api.discoverFast;
+    if (feed?.mode === "live" && discoverFast) {
+      dualSearchingRef.current = true;
+      const fastController = new AbortController();
+      activeFast.current = fastController;
+      setFastPending(true);
+      const sessionId =
+        globalThis.crypto?.randomUUID?.() ??
+        `search-${Date.now()}-${turnId}-${Math.random().toString(36).slice(2, 10)}`;
+      const request = { profileId, message, sessionId, idempotencyKey };
+      let quickResult: DiscoveryResponse | null = null;
+      let deepResult: DiscoveryResponse | null = null;
+      let quickDone = false;
+      let deepDone = false;
+      let published = false;
+      const publish = () => {
+        const next =
+          quickResult && deepResult
+            ? mergeDiscoveryResults(quickResult, deepResult, message)
+            : (deepResult ?? quickResult);
+        if (!next) return;
+        if (!published) scrollToNextResult.current = true;
+        published = true;
+        setResult(next);
+        setResultPhase(deepResult ? "deep" : "quick");
+        setTurns([
+          { id: `${sessionId}-user-${turnId}`, role: "user", text: message },
+          {
+            id: `${sessionId}-assistant-${turnId}`,
+            role: "assistant",
+            text: next.reply,
+          },
+        ]);
+        setQuery("");
+      };
+      void discoverFast(request, fastController.signal)
+        .then((response) => {
+          if (
+            fastTicket !== fastSerial.current ||
+            fastController.signal.aborted
+          )
+            return;
+          quickResult = response;
+          publish();
+          setAnnouncement(
+            controller.signal.aborted
+              ? "Quick suggestions are ready; deep search was stopped."
+              : "Quick suggestions are ready; deep search continues.",
+          );
+        })
+        .catch((fastError: unknown) => {
+          if (
+            fastTicket !== fastSerial.current ||
+            fastController.signal.aborted
+          )
+            return;
+          if ((deepDone || controller.signal.aborted) && !deepResult)
+            setError(safeErrorMessage(fastError));
+          else
+            setAnnouncement(
+              "Quick search did not return; deep search continues.",
+            );
+        })
+        .finally(() => {
+          if (fastTicket !== fastSerial.current) return;
+          quickDone = true;
+          activeFast.current = null;
+          setFastPending(false);
+        });
+      void api
+        .discover({ ...request, createSession: true }, controller.signal)
+        .then((response) => {
+          if (serial !== searchSerial.current || controller.signal.aborted)
+            return;
+          deepResult = response;
+          publish();
+          setActiveStage(stageLabels.length - 1);
+          setAnnouncement("Deep search finished; results have been enriched.");
+        })
+        .catch((deepError: unknown) => {
+          if (serial !== searchSerial.current || controller.signal.aborted)
+            return;
+          if (quickDone && !quickResult) setError(safeErrorMessage(deepError));
+          else
+            setAnnouncement(
+              "Deep search could not finish; quick matches remain.",
+            );
+        })
+        .finally(() => {
+          if (serial !== searchSerial.current) return;
+          deepDone = true;
+          activeSearch.current = null;
+          activeSearchKey.current = null;
+          setIsSearching(false);
+          setIsWakingAgent(false);
+        });
+      void api
+        .getInferenceResidency(controller.signal, true)
+        .then((status) => {
+          if (
+            serial === searchSerial.current &&
+            !controller.signal.aborted &&
+            status.state === "unloaded"
+          ) {
+            setIsWakingAgent(true);
+            setActiveStage((stage) => Math.min(stage, 1));
+          }
+        })
+        .catch(() => undefined);
+      return;
+    }
     try {
       if (feed?.mode === "live") {
         try {
@@ -295,6 +433,7 @@ export function HomePage({
       if (serial !== searchSerial.current || controller.signal.aborted) return;
       scrollToNextResult.current = true;
       setResult(response as DiscoveryUiResponse);
+      setResultPhase("deep");
       setTurns([
         {
           id: `${response.sessionId}-user-${requestCounter.current}`,
@@ -330,6 +469,11 @@ export function HomePage({
     const controller = new AbortController();
     const serial = ++chatSerial.current;
     const idempotencyKey = `${Date.now()}-${++requestCounter.current}`;
+    // A late initial Fast response must never overwrite a refined shortlist.
+    fastSerial.current += 1;
+    activeFast.current?.abort();
+    activeFast.current = null;
+    setFastPending(false);
     activeChat.current = controller;
     activeChatKey.current = idempotencyKey;
     setChatSearching(true);
@@ -349,6 +493,8 @@ export function HomePage({
       if (serial !== chatSerial.current || controller.signal.aborted) return;
       scrollToNextResult.current = true;
       setResult(response);
+      setResultQuery(message);
+      setResultPhase("deep");
       setTurns((current) => [
         ...current,
         {
@@ -424,15 +570,16 @@ export function HomePage({
     pendingAction?.titleId === item.id ? pendingAction.kind : undefined;
 
   const resultMode = result?.mode ?? "preview";
-  const availableResults =
-    result?.available.filter((item) =>
-      ["available", "partial"].includes(item.title.availability),
-    ) ?? [];
-  const unavailableResults =
-    result?.unavailable.filter(
-      (item) => item.title.availability === "unavailable",
-    ) ?? [];
-  const unknownResults = result?.unverified ?? [];
+  const displayGroups = result
+    ? groupDiscoveryResults(
+        result,
+        (item) => playbackChecks.stateFor(item.title)?.status,
+        resultQuery,
+      )
+    : null;
+  const availableResults = displayGroups?.available ?? [];
+  const unavailableResults = displayGroups?.unavailable ?? [];
+  const checkingResults = displayGroups?.checking ?? [];
   const wakeMessage =
     locale === "cs"
       ? "Ouč, agent usnul. Musím ho vzbudit, počkej chvíli…"
@@ -473,27 +620,34 @@ export function HomePage({
             }}
             placeholder={"Try “an autumn movie with Sandra Bullock”"}
           />
-          <button
-            className={`composer-submit${isSearching ? " is-searching" : ""}${isStopping ? " is-stopping" : ""}`}
-            type={isSearching ? "button" : "submit"}
-            onClick={isSearching ? stopSearch : undefined}
-            disabled={isStopping || (!isSearching && query.trim().length < 2)}
-            aria-label={
-              isStopping
-                ? "Stopping search"
-                : isSearching
-                  ? "Stop search"
-                  : "Find something"
-            }
+          <span
+            className={`composer-submit-shell${isSearching ? " is-searching" : ""}`}
           >
-            <span className="composer-submit__label" aria-hidden={isSearching}>
-              <span className="composer-submit__enter" aria-hidden="true">
-                ↵
+            <button
+              className={`composer-submit${isSearching ? " is-searching" : ""}${isStopping ? " is-stopping" : ""}`}
+              type={isSearching ? "button" : "submit"}
+              onClick={isSearching ? stopSearch : undefined}
+              disabled={isStopping || (!isSearching && query.trim().length < 2)}
+              aria-label={
+                isStopping
+                  ? "Stopping search"
+                  : isSearching
+                    ? "Stop search"
+                    : "Find something"
+              }
+            >
+              <span
+                className="composer-submit__label"
+                aria-hidden={isSearching}
+              >
+                <span className="composer-submit__enter" aria-hidden="true">
+                  ↵
+                </span>
               </span>
-            </span>
-            <span className="composer-submit__stop" aria-hidden="true" />
-            <span className="composer-submit__gleam" aria-hidden="true" />
-          </button>
+              <span className="composer-submit__stop" aria-hidden="true" />
+              <span className="composer-submit__gleam" aria-hidden="true" />
+            </button>
+          </span>
         </form>
         <div className="prompt-examples" aria-label="Example searches">
           {[
@@ -556,6 +710,13 @@ export function HomePage({
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}
       </p>
+      {fastPending && (
+        <p className="preview-notice" role="status">
+          {isSearching
+            ? "Checking likely matches while StreamerAI explores your request."
+            : "Still checking likely matches."}
+        </p>
+      )}
       {result && (
         <section
           className="discovery-results"
@@ -563,31 +724,39 @@ export function HomePage({
         >
           <div className="section-heading">
             <div>
-              <p className="eyebrow">StreamerAI answer</p>
+              <p className="eyebrow">
+                {resultPhase === "quick"
+                  ? isSearching
+                    ? "Quick suggestions · deep search running"
+                    : "Quick suggestions"
+                  : "StreamerAI answer"}
+              </p>
               <h2 id="results-heading" ref={resultsHeadingRef} tabIndex={-1}>
                 A considered shortlist
               </h2>
             </div>
-            <p>{result.reply}</p>
+            {result.reply && <p>{result.reply}</p>}
           </div>
           {result.warnings.map((warning) => (
             <p className="preview-notice" key={warning}>
               {warning}
             </p>
           ))}
-          {result.bestMatch && (
+          {displayGroups?.bestMatch && (
             <TitleCard
-              item={result.bestMatch.title}
+              item={displayGroups.bestMatch.title}
               preferences={playbackPreferences}
               onOpen={onOpenTitle}
-              reason={result.bestMatch.reason}
+              reason={displayGroups.bestMatch.reason}
               hero
               onPlay={play}
               onCheck={playbackChecks.check}
-              playbackCheck={playbackChecks.stateFor(result.bestMatch.title)}
+              playbackCheck={playbackChecks.stateFor(
+                displayGroups.bestMatch.title,
+              )}
               onAdd={add}
               playbackEnabled={resultMode === "live"}
-              pendingAction={pendingFor(result.bestMatch.title)}
+              pendingAction={pendingFor(displayGroups.bestMatch.title)}
             />
           )}
           {availableResults.length > 0 && (
@@ -634,15 +803,20 @@ export function HomePage({
               </div>
             </div>
           )}
-          {unknownResults.length > 0 && (
+          {checkingResults.length > 0 && (
             <div className="result-group result-group--unknown">
-              <h3>Found, availability not checked</h3>
+              <h3>
+                {resultMode === "live"
+                  ? "Checking availability"
+                  : "Availability not verified"}
+              </h3>
               <p className="result-group__description">
-                These titles are valid database matches, but the streaming
-                source did not return a definitive result.
+                {resultMode === "live"
+                  ? "Streaming sources are being verified. Play becomes available after a successful check."
+                  : "These titles need a connected streaming source before playback can be checked."}
               </p>
               <div className="title-grid">
-                {unknownResults.map(({ title, reason }) => (
+                {checkingResults.map(({ title, reason }) => (
                   <TitleCard
                     key={title.id}
                     item={title}

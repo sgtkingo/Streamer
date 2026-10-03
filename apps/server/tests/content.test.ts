@@ -421,6 +421,8 @@ describe("provider-neutral content API", () => {
         subtitleLanguages: ["cs"],
       }),
     );
+    let deepUserMessages = 0;
+    let deepQuickMessages = 0;
     const contentProvider: StreamerContentProvider = {
       id: "test-coordinator",
       mode: "live",
@@ -432,8 +434,32 @@ describe("provider-neutral content API", () => {
           generatedAt,
           sections: [],
         }),
-      discover: async (request, completedAt) =>
+      discoverFast: async (request, completedAt) =>
         DiscoveryResponseSchema.parse({
+          sessionId: request.sessionId ?? "dynamic-session",
+          mode: "live",
+          stage: "completed",
+          reply: "Quick validated matches.",
+          bestMatch: { title: discoveredTitle, reason: "Fast API match." },
+          available: [],
+          unavailable: [],
+          unverified: [],
+          warnings: [],
+          completedAt,
+        }),
+      discover: async (request, completedAt, context) => {
+        deepUserMessages =
+          context?.messages.filter((item) => item.role === "user").length ?? 0;
+        deepQuickMessages =
+          context?.messages.filter(
+            (item) =>
+              item.role === "assistant" &&
+              typeof item.content === "object" &&
+              item.content !== null &&
+              "stage" in item.content &&
+              item.content.stage === "quick",
+          ).length ?? 0;
+        return DiscoveryResponseSchema.parse({
           sessionId: request.sessionId ?? "dynamic-session",
           mode: "live",
           stage: "completed",
@@ -444,7 +470,8 @@ describe("provider-neutral content API", () => {
           unverified: [],
           warnings: [],
           completedAt,
-        }),
+        });
+      },
       preparePlayback,
       checkPlayback,
     };
@@ -457,12 +484,24 @@ describe("provider-neutral content API", () => {
     });
     apps.push(instance);
 
+    const fastDiscovery = await instance.inject({
+      method: "POST",
+      url: "/api/v1/discovery/fast",
+      payload: {
+        profileId: "default",
+        message: "Find the dynamic test title",
+        sessionId: "shared-dynamic-session",
+        idempotencyKey: "dynamic-request-1",
+      },
+    });
     const discovery = await instance.inject({
       method: "POST",
       url: "/api/v1/discovery/sessions",
       payload: {
         profileId: "default",
         message: "Find the dynamic test title",
+        sessionId: "shared-dynamic-session",
+        createSession: true,
         idempotencyKey: "dynamic-request-1",
       },
     });
@@ -501,6 +540,10 @@ describe("provider-neutral content API", () => {
     });
 
     expect(discovery.statusCode).toBe(200);
+    expect(fastDiscovery.statusCode).toBe(200);
+    expect(fastDiscovery.json().sessionId).toBe("shared-dynamic-session");
+    expect(deepUserMessages).toBe(1);
+    expect(deepQuickMessages).toBe(1);
     expect(saved.statusCode).toBe(200);
     expect(saved.json().items[0].title.id).toBe("sai:test:dynamic-title");
     expect(saved.json().items[0].title.sources).toMatchObject([

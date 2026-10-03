@@ -160,6 +160,468 @@ function coordinatorDependencies() {
 }
 
 describe("LiveContentCoordinator", () => {
+  it("returns validated quick matches without starting the local agent", async () => {
+    const dependencies = coordinatorDependencies();
+    vi.mocked(dependencies.media.search).mockImplementation(async () =>
+      [1, 2, 3].map((number) => ({
+        ref: { providerId: "webshare", candidateId: `quick-${number}` },
+        releaseName: `Canonical.One.2001.${number}080p.mkv`,
+        sizeBytes: number * 100,
+        seasonNumber: null,
+        episodeNumber: null,
+        confidence: 0.8,
+        provenance: { ...provenance, providerId: "webshare" },
+      })),
+    );
+    const states = new NonPersistentMemoryIntegrationStateStore();
+    for (const integrationId of ["tmdb", "webshare"]) {
+      await states.set({
+        integrationId,
+        status: "connected",
+        configured: true,
+        checkedAt: NOW,
+        updatedAt: NOW,
+      });
+    }
+    const coordinator = new LiveContentCoordinator({
+      ...dependencies,
+      integrationStateStore: states,
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    const result = await coordinator.discoverFast(
+      {
+        profileId: "default",
+        sessionId: "shared-session",
+        message: "Agent title one",
+        idempotencyKey: "parallel-0001",
+      },
+      NOW,
+    );
+    expect(result.bestMatch?.title.title).toBe("Canonical One");
+    expect(result.bestMatch?.title.sources).toHaveLength(3);
+    expect(result.bestMatch?.reason).toBe("Similar title match.");
+    expect(dependencies.generateStructured).not.toHaveBeenCalled();
+    expect(dependencies.metadata.search).toHaveBeenCalledTimes(1);
+    expect(dependencies.media.inspect).toHaveBeenCalledTimes(3);
+  });
+
+  it("checks beyond two restricted files before declaring a quick title unavailable", async () => {
+    const dependencies = coordinatorDependencies();
+    vi.mocked(dependencies.media.search).mockResolvedValue(
+      [1, 2, 3].map((number) => ({
+        ref: { providerId: "webshare", candidateId: `quick-${number}` },
+        releaseName: `Canonical.One.2001.${number}080p.mkv`,
+        sizeBytes: number * 100,
+        seasonNumber: null,
+        episodeNumber: null,
+        confidence: 0.8,
+        provenance: { ...provenance, providerId: "webshare" },
+      })),
+    );
+    vi.mocked(dependencies.media.inspect).mockImplementation(async (ref) => {
+      if (ref.candidateId !== "quick-3") throw new Error("restricted file");
+      return {
+        ref,
+        variantId: ref.candidateId,
+        format: {
+          label: "1080p · H.264",
+          container: "mkv",
+          resolution: "1080p",
+          videoCodec: "H.264",
+          audioLanguages: ["en"],
+          subtitleLanguages: [],
+        },
+        directPlay: true,
+        supportsHttpRange: true,
+        embeddedSubtitles: [],
+        provenance: { ...provenance, providerId: "webshare" },
+        expiresAt: null,
+      };
+    });
+    const coordinator = new LiveContentCoordinator({
+      ...dependencies,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    const result = await coordinator.discoverFast(
+      {
+        profileId: "default",
+        sessionId: "shared-session",
+        message: "canonical one",
+        idempotencyKey: "quick-restricted",
+      },
+      NOW,
+    );
+    expect(result.bestMatch?.title.availability).toBe("available");
+    expect(result.bestMatch?.title.sources?.[0]?.candidateId).toBe("quick-3");
+    expect(dependencies.media.inspect).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries a yearless media query for a quick series title such as Pan Tau", async () => {
+    const dependencies = coordinatorDependencies();
+    const panTau = {
+      ref: {
+        providerId: "tmdb",
+        externalId: "42",
+        entityType: "series" as const,
+      },
+      kind: "series" as const,
+      title: "Pan Tau",
+      originalTitle: "Pan Tau",
+      year: 1970,
+      confidence: 1,
+      provenance,
+    };
+    vi.mocked(dependencies.metadata.search).mockResolvedValue([panTau]);
+    vi.mocked(dependencies.metadata.getTitle).mockResolvedValue({
+      ...metadataPayload("42", "Pan Tau"),
+      ref: panTau.ref,
+      kind: "series",
+      year: 1970,
+    });
+    dependencies.metadata.getSeriesStructure = vi.fn().mockResolvedValue({
+      seriesRef: panTau.ref,
+      seasons: [
+        {
+          ref: { providerId: "tmdb", externalId: "43", entityType: "season" },
+          seasonNumber: 1,
+          title: "Season 1",
+          provenance,
+          episodes: [
+            {
+              ref: {
+                providerId: "tmdb",
+                externalId: "44",
+                entityType: "episode",
+              },
+              episodeNumber: 1,
+              title: "Episode 1",
+              airDate: "1970-01-01",
+              runtimeMinutes: 30,
+              provenance,
+            },
+          ],
+        },
+      ],
+      complete: true,
+      provenance,
+    });
+    vi.mocked(dependencies.media.search).mockImplementation(async (request) =>
+      request.year === null
+        ? [
+            {
+              ref: { providerId: "webshare", candidateId: "pan-tau-s01e01" },
+              releaseName: "Pan.Tau.S01E01.mkv",
+              sizeBytes: 100,
+              seasonNumber: null,
+              episodeNumber: null,
+              confidence: 0.8,
+              provenance: { ...provenance, providerId: "webshare" },
+            },
+          ]
+        : [],
+    );
+    const coordinator = new LiveContentCoordinator({
+      ...dependencies,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    const result = await coordinator.discoverFast(
+      {
+        profileId: "default",
+        sessionId: "shared-session",
+        message: "Pan Tau",
+        idempotencyKey: "quick-pan-tau",
+      },
+      NOW,
+    );
+    expect(result.bestMatch?.title.title).toBe("Pan Tau");
+    expect(result.bestMatch?.title.availability).toBe("available");
+    expect(result.bestMatch?.title.sources?.[0]?.candidateId).toBe(
+      "pan-tau-s01e01",
+    );
+    expect(dependencies.media.search).toHaveBeenCalledTimes(2);
+    expect(
+      vi.mocked(dependencies.media.search).mock.calls[1]?.[0].year,
+    ).toBeNull();
+    expect(dependencies.generateStructured).not.toHaveBeenCalled();
+  });
+
+  it("keeps a truncated media search unverified instead of claiming the title is unavailable", async () => {
+    const dependencies = coordinatorDependencies();
+    vi.mocked(dependencies.media.search).mockImplementation(async (request) =>
+      request.year === null
+        ? []
+        : Array.from({ length: 20 }, (_, index) => ({
+            ref: {
+              providerId: "webshare",
+              candidateId: `restricted-${index}`,
+            },
+            releaseName: `Canonical.One.2001.${index}.mkv`,
+            sizeBytes: index + 1,
+            seasonNumber: null,
+            episodeNumber: null,
+            confidence: 0.8,
+            provenance: { ...provenance, providerId: "webshare" },
+          })),
+    );
+    vi.mocked(dependencies.media.inspect).mockRejectedValue(
+      new Error("restricted file"),
+    );
+    const coordinator = new LiveContentCoordinator({
+      ...dependencies,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    const result = await coordinator.discoverFast(
+      {
+        profileId: "default",
+        sessionId: "shared-session",
+        message: "canonical one",
+        idempotencyKey: "quick-truncated",
+      },
+      NOW,
+    );
+    expect(result.unavailable).toHaveLength(0);
+    expect(result.unverified[0]?.title.availability).toBe("unknown");
+    expect(dependencies.media.inspect).toHaveBeenCalledTimes(12);
+  });
+
+  it("does not present unrelated trending titles as quick matches for a mood query", async () => {
+    const dependencies = coordinatorDependencies();
+    vi.mocked(dependencies.metadata.search).mockResolvedValue([]);
+    dependencies.metadata.getFeed = vi.fn().mockResolvedValue([
+      {
+        ref: { providerId: "tmdb", externalId: "1", entityType: "movie" },
+        kind: "movie",
+        title: "Canonical One",
+        originalTitle: "Canonical One",
+        year: 2001,
+        confidence: 1,
+        provenance,
+      },
+    ]);
+    const coordinator = new LiveContentCoordinator({
+      ...dependencies,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    const result = await coordinator.discoverFast(
+      {
+        profileId: "default",
+        sessionId: "shared-session",
+        message: "An autumn mystery with Sandra Bullock",
+        idempotencyKey: "quick-mood",
+      },
+      NOW,
+    );
+    expect(result.bestMatch).toBeNull();
+    expect(result.available).toHaveLength(0);
+    expect(result.unavailable).toHaveLength(0);
+    expect(result.unverified).toHaveLength(0);
+    expect(dependencies.media.search).not.toHaveBeenCalled();
+    expect(dependencies.generateStructured).not.toHaveBeenCalled();
+
+    vi.mocked(dependencies.metadata.search).mockResolvedValue([
+      {
+        ref: { providerId: "tmdb", externalId: "1", entityType: "movie" },
+        kind: "movie",
+        title: "Canonical One",
+        originalTitle: "Canonical One",
+        year: 2001,
+        confidence: 1,
+        provenance,
+      },
+    ]);
+    const unrelatedApiHit = await coordinator.discoverFast(
+      {
+        profileId: "default",
+        sessionId: "shared-session",
+        message: "An autumn mystery with Sandra Bullock",
+        idempotencyKey: "quick-unrelated-api-hit",
+      },
+      NOW,
+    );
+    expect(unrelatedApiHit.bestMatch).toBeNull();
+    expect(unrelatedApiHit.available).toHaveLength(0);
+    expect(dependencies.media.search).not.toHaveBeenCalled();
+  });
+
+  it("rechecks a provisional title through safe title and year variants without repeating files", async () => {
+    const title = {
+      ...new PreviewContentProvider()
+        .bootstrapTitles()
+        .find((item) => item.kind === "movie")!,
+      id: "sai:tmdb:movie:42",
+      title: "Pán času",
+      originalTitle: "Time Traveller",
+      year: 1970,
+      availability: "unknown" as const,
+      sources: [],
+    };
+    const candidate = (candidateId: string, releaseName: string) => ({
+      ref: { providerId: "webshare", candidateId },
+      releaseName,
+      sizeBytes: 100,
+      seasonNumber: null,
+      episodeNumber: null,
+      confidence: 0.8,
+      provenance: { ...provenance, providerId: "webshare" },
+    });
+    const unrelated = candidate("wrong-film", "Another.Movie.1970.mkv");
+    const restricted = candidate("restricted", "Time.Traveller.1970.1080p.mkv");
+    const playable = candidate("playable", "Pan.Casu.1080p.mkv");
+    const search = vi.fn().mockImplementation(async (request) => {
+      if (request.originalTitle !== null && request.year === 1970)
+        return [unrelated, restricted];
+      if (request.originalTitle !== null && request.year === null)
+        return [restricted];
+      if (request.originalTitle === null && request.year === null)
+        return [unrelated, playable];
+      return [];
+    });
+    const checkPlayback = vi.fn().mockImplementation(async (ref) => {
+      if (ref.candidateId === "restricted") throw new Error("restricted");
+      return undefined;
+    });
+    const coordinator = new LiveContentCoordinator({
+      agent: {} as AgentProvider,
+      metadata: {} as MetadataProvider,
+      media: { search, checkPlayback } as unknown as MediaProvider,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "cs",
+      now: () => new Date(NOW),
+    });
+
+    await coordinator.checkPlayback("default", title);
+    expect(search).toHaveBeenCalledTimes(4);
+    expect(
+      search.mock.calls.map(([request]) => [
+        request.originalTitle,
+        request.year,
+      ]),
+    ).toEqual([
+      ["Time Traveller", 1970],
+      [null, 1970],
+      ["Time Traveller", null],
+      [null, null],
+    ]);
+    expect(checkPlayback.mock.calls.map(([ref]) => ref.candidateId)).toEqual([
+      "restricted",
+      "playable",
+    ]);
+
+    await coordinator.checkPlayback("default", title);
+    expect(search).toHaveBeenCalledTimes(4);
+    expect(checkPlayback.mock.calls[2]?.[0].candidateId).toBe("playable");
+  });
+
+  it("does not accept a release whose longer word only contains the movie title", async () => {
+    const title = {
+      ...new PreviewContentProvider()
+        .bootstrapTitles()
+        .find((item) => item.kind === "movie")!,
+      id: "sai:tmdb:movie:up",
+      title: "Up",
+      originalTitle: "Up",
+      year: 2009,
+      availability: "unknown" as const,
+      sources: [],
+    };
+    const search = vi.fn().mockResolvedValue([
+      {
+        ref: { providerId: "webshare", candidateId: "upgrade" },
+        releaseName: "Upgrade.2009.mkv",
+        sizeBytes: 100,
+        seasonNumber: null,
+        episodeNumber: null,
+        confidence: 0.8,
+        provenance: { ...provenance, providerId: "webshare" },
+      },
+    ]);
+    const checkPlayback = vi.fn().mockResolvedValue(undefined);
+    const coordinator = new LiveContentCoordinator({
+      agent: {} as AgentProvider,
+      metadata: {} as MetadataProvider,
+      media: { search, checkPlayback } as unknown as MediaProvider,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    await expect(coordinator.checkPlayback("default", title)).rejects.toThrow(
+      "No playback candidate remains available",
+    );
+    expect(checkPlayback).not.toHaveBeenCalled();
+  });
+
   it("fills an episode guide in the background while an already verified episode stays playable", async () => {
     const preview = new PreviewContentProvider()
       .bootstrapTitles()
@@ -357,6 +819,15 @@ describe("LiveContentCoordinator", () => {
             createdAt: NOW,
           },
           {
+            role: "assistant",
+            content: {
+              reply: "Quick API suggestions are ready.",
+              titles: ["Pan Tau"],
+              stage: "quick",
+            },
+            createdAt: NOW,
+          },
+          {
             role: "user",
             content: { message: "Less spooky, please" },
             createdAt: NOW,
@@ -377,7 +848,16 @@ describe("LiveContentCoordinator", () => {
             "Previously suggested: Canonical One",
           ),
         }),
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.stringContaining(
+            "Deterministic TMDB quick search found these title candidates: Pan Tau",
+          ),
+        }),
       ]),
+    );
+    expect(input.messages[0]?.content).toContain(
+      "A quick-search note, if present, lists deterministic TMDB title candidates",
     );
   });
 

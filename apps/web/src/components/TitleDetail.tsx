@@ -27,6 +27,17 @@ interface Props {
   onAdded: () => void;
 }
 
+function PlayActionContent({ label }: { label: string }) {
+  return (
+    <>
+      <span className="play-action__icon" aria-hidden="true">
+        ▶
+      </span>
+      <span className="play-action__label">{label}</span>
+    </>
+  );
+}
+
 export function TitleDetail({
   api,
   profileId,
@@ -299,13 +310,25 @@ export function TitleDetail({
           <div className="title-detail__actions">
             {current.kind === "movie" && playbackEnabled && (
               <button
-                className={`button button--primary${movieStatus === "checking" ? " button--checking" : ""}`}
+                className={`button button--primary button--compact${movieStatus === "checking" ? " button--checking" : ""}${movieStatus === "ready" && playing === null ? " button--play-action" : ""}`}
                 type="button"
                 disabled={movieStatus !== "ready" || playing !== null}
                 onClick={() => void play()}
               >
                 {movieStatus === "ready"
-                  ? "▶ Play"
+                  ? playing === "movie"
+                    ? "Starting…"
+                    : (
+                        <PlayActionContent
+                          label={
+                            current.progressPercent !== null &&
+                            current.progressPercent >= 2 &&
+                            current.progressPercent < 95
+                              ? "Continue"
+                              : "Play"
+                          }
+                        />
+                      )
                   : movieStatus === "checking"
                     ? "Checking"
                     : "Currently unavailable"}
@@ -446,7 +469,7 @@ export function TitleDetail({
                       {episode.availability === "available" &&
                         playbackEnabled && (
                           <button
-                            className="button button--primary button--compact"
+                            className={`button button--primary button--compact${playing === `${episode.seasonNumber}:${episode.episodeNumber}` ? "" : " button--play-action"}`}
                             type="button"
                             data-episode={`${episode.seasonNumber}:${episode.episodeNumber}`}
                             disabled={playing !== null}
@@ -469,8 +492,8 @@ export function TitleDetail({
                                     episode.seasonNumber &&
                                   current.resumeEpisode?.episodeNumber ===
                                     episode.episodeNumber
-                                ? "Continue"
-                                : "▶ Play"}
+                                ? <PlayActionContent label="Continue" />
+                                : <PlayActionContent label="Play" />}
                           </button>
                         )}
                       {episode.availability === "available" &&

@@ -412,6 +412,8 @@ export const DiscoveryRequestSchema = z
     profileId: z.string().trim().min(1).max(120),
     message: z.string().trim().min(2).max(2_000),
     sessionId: z.string().trim().min(1).max(120).optional(),
+    /** Initial parallel search may create its client-selected shared session. */
+    createSession: z.boolean().optional(),
     idempotencyKey: z.string().trim().min(8).max(120),
   })
   .strict();

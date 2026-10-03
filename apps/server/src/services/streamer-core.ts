@@ -254,6 +254,122 @@ export class StreamerCore {
     return controller !== undefined;
   }
 
+  private ensureDiscoverySession(
+    request: DiscoveryRequest,
+    createIfMissing: boolean,
+  ): string {
+    const sessionId = request.sessionId ?? randomUUID();
+    const existing = this.database.discoverySessions.get(sessionId);
+    if (existing === null) {
+      if (request.sessionId !== undefined && !createIfMissing)
+        throw new DiscoverySessionNotFoundError(sessionId);
+      this.database.discoverySessions.create({
+        id: sessionId,
+        profileId: request.profileId,
+        mode: this.contentProvider.mode,
+        context: {},
+      });
+    } else if (
+      existing.profileId !== request.profileId ||
+      existing.state !== "active" ||
+      existing.mode !== this.contentProvider.mode
+    ) {
+      throw new DiscoverySessionClosedError(sessionId);
+    }
+    const prior = this.database.discoverySessions
+      .listMessages<{ message?: string }>(sessionId)
+      .find(
+        (item) =>
+          item.role === "user" && item.requestId === request.idempotencyKey,
+      );
+    if (prior && prior.content.message !== request.message)
+      throw new IdempotencyConflictError(request.idempotencyKey);
+    if (!prior) {
+      this.database.discoverySessions.appendMessage({
+        id: randomUUID(),
+        sessionId,
+        role: "user",
+        content: { message: request.message },
+        requestId: request.idempotencyKey,
+      });
+    }
+    return sessionId;
+  }
+
+  async discoverFast(
+    rawRequest: DiscoveryRequest,
+    externalSignal?: AbortSignal,
+  ): Promise<DiscoveryResponse> {
+    const request = DiscoveryRequestSchema.parse(rawRequest);
+    this.requireProfile(request.profileId);
+    if (this.contentProvider.discoverFast === undefined)
+      throw new PlaybackNotConfiguredError();
+    externalSignal?.throwIfAborted();
+    const sessionId = this.ensureDiscoverySession(request, true);
+    const response = DiscoveryResponseSchema.parse(
+      await this.contentProvider.discoverFast(
+        { ...request, sessionId },
+        this.now().toISOString(),
+        {
+          sessionId,
+          signal: externalSignal,
+          messages: this.database.discoverySessions.listMessages(sessionId),
+        },
+      ),
+    );
+    externalSignal?.throwIfAborted();
+    if (
+      response.sessionId !== sessionId ||
+      response.mode !== this.contentProvider.mode
+    )
+      throw new Error(
+        "Fast content provider returned a mismatched session or mode.",
+      );
+    const ranked = [
+      ...(response.bestMatch ? [response.bestMatch] : []),
+      ...response.available,
+      ...response.unavailable,
+      ...response.unverified,
+    ];
+    for (const item of ranked) {
+      externalSignal?.throwIfAborted();
+      this.database.titles.upsert(storageTitle(item.title));
+    }
+    const quickRequestId = `quick-${createHash("sha256").update(request.idempotencyKey).digest("hex")}`;
+    const existingReplies = this.database.discoverySessions
+      .listMessages<{ stage?: string }>(sessionId)
+      .filter(
+        (item) =>
+          item.role === "assistant" &&
+          (item.requestId === request.idempotencyKey ||
+            item.requestId === quickRequestId),
+      );
+    if (existingReplies.length === 0) {
+      this.database.discoverySessions.appendMessage({
+        id: randomUUID(),
+        sessionId,
+        role: "assistant",
+        content: {
+          reply: response.reply,
+          titles: ranked.map((item) => item.title.title),
+          stage: "quick",
+        },
+        requestId: quickRequestId,
+      });
+    }
+    const decorate = (item: (typeof ranked)[number]) => ({
+      ...item,
+      title: this.decorateTitle(request.profileId, item.title),
+    });
+    return DiscoveryResponseSchema.parse({
+      ...response,
+      bestMatch: response.bestMatch ? decorate(response.bestMatch) : null,
+      available: response.available.map(decorate),
+      unavailable: response.unavailable.map(decorate),
+      unverified: response.unverified.map(decorate),
+    });
+  }
+
   async discover(
     rawRequest: DiscoveryRequest,
     externalSignal?: AbortSignal,
@@ -301,35 +417,13 @@ export class StreamerCore {
     this.activeDiscoveries.set(cancellationKey, controller);
     try {
       controller.signal.throwIfAborted();
-      const sessionId = request.sessionId ?? randomUUID();
-      const existingSession = this.database.discoverySessions.get(sessionId);
-      if (existingSession === null) {
-        if (request.sessionId !== undefined) {
-          throw new DiscoverySessionNotFoundError(sessionId);
-        }
-        this.database.discoverySessions.create({
-          id: sessionId,
-          profileId: request.profileId,
-          mode: this.contentProvider.mode,
-          context: {},
-        });
-      } else if (existingSession.profileId !== request.profileId) {
-        throw new DiscoverySessionNotFoundError(sessionId);
-      } else if (
-        existingSession.state !== "active" ||
-        existingSession.mode !== this.contentProvider.mode
-      ) {
-        throw new DiscoverySessionClosedError(sessionId);
-      }
+      const sessionId = this.ensureDiscoverySession(
+        request,
+        request.createSession === true,
+      );
 
-      this.database.discoverySessions.appendMessage({
-        id: randomUUID(),
-        sessionId,
-        role: "user",
-        content: { message: request.message },
-        requestId: request.idempotencyKey,
-      });
-
+      // The fast branch may finish first. Its validated metadata is useful
+      // evidence for the agent, but neither branch waits for the other.
       const messages = this.database.discoverySessions.listMessages(sessionId);
       const providerResult = DiscoveryResponseSchema.parse(
         await this.contentProvider.discover(

@@ -207,6 +207,63 @@ describe("on-demand catalog, Library and History", () => {
     expect(database.history.list("profile-1")).toMatchObject([
       { id: "history-1", eventType: "start" },
     ]);
+
+    const {
+      createdAt: _createdAt,
+      updatedAt: _updatedAt,
+      ...canonical
+    } = stored;
+    const source = {
+      id: "a".repeat(32),
+      providerId: "media-fixture",
+      candidateId: "file-a",
+      releaseName: "Example.1080p.mkv",
+      sizeBytes: 100,
+      format: canonical.formats[0]!,
+      seasonNumber: null,
+      episodeNumber: null,
+      checkedAt: "2026-09-27T10:00:00.000Z",
+    };
+    database.titles.upsert({ ...canonical, sources: [source] });
+    database.titles.upsert({
+      ...canonical,
+      sources: [{ ...source, id: "b".repeat(32), candidateId: "file-b" }],
+    });
+    database.titles.upsert({
+      ...canonical,
+      availability: "unavailable",
+      formats: [],
+      sources: [],
+    });
+    expect(database.titles.get(stored.id)).toMatchObject({
+      availability: "available",
+      sources: [{ candidateId: "file-a" }, { candidateId: "file-b" }],
+    });
+    database.titles.upsert({
+      ...canonical,
+      availability: "unavailable",
+      availabilityCheckedAt: "2026-09-27T10:00:01.000Z",
+      formats: [],
+      sources: [],
+    });
+    expect(database.titles.get(stored.id)?.availability).toBe("available");
+    database.titles.upsert({
+      ...canonical,
+      availability: "unavailable",
+      availabilityCheckedAt: "2026-09-27T10:03:00.000Z",
+      formats: [],
+      sources: [],
+    });
+    expect(database.titles.get(stored.id)?.availability).toBe("unavailable");
+    database.titles.upsert({
+      ...canonical,
+      availability: "unknown",
+      availabilityProvider: null,
+      availabilityCheckedAt: null,
+      formats: [],
+      sources: [],
+    });
+    expect(database.titles.get(stored.id)?.availability).toBe("unavailable");
   });
 });
 

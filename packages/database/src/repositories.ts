@@ -567,11 +567,48 @@ export class CatalogTitlesRepository {
       existingData?.availabilityCheckedAt === undefined
         ? Number.NEGATIVE_INFINITY
         : Date.parse(existingData.availabilityCheckedAt);
+    const availabilityRank = (state: string) =>
+      state === "available" || state === "partial"
+        ? 3
+        : state === "unavailable"
+          ? 2
+          : 1;
+    // Parallel fast/deep discovery can finish seconds apart. A later bounded
+    // miss must not erase a playable source verified by the sibling branch.
+    // A later, independent check may still retire stale availability.
+    const recentlyVerifiedStream =
+      existingData !== null &&
+      availabilityRank(existingData.availability) === 3 &&
+      availabilityRank(incoming.availability) < 3 &&
+      incomingAvailabilityTime - existingAvailabilityTime < 120_000;
+    const inconclusiveDowngrade =
+      existingData !== null &&
+      existingData.availability !== "unknown" &&
+      incoming.availability === "unknown";
     const availabilityIsFresh =
-      existingData === null ||
-      incomingAvailabilityTime >= existingAvailabilityTime;
+      !recentlyVerifiedStream &&
+      !inconclusiveDowngrade &&
+      (existingData === null ||
+        incomingAvailabilityTime > existingAvailabilityTime ||
+        (incomingAvailabilityTime === existingAvailabilityTime &&
+          availabilityRank(incoming.availability) >=
+            availabilityRank(existingData.availability) &&
+          (incoming.sources?.length ?? 0) >=
+            (existingData.sources?.length ?? 0)));
+    const mergedSources = [
+      ...(existingData?.sources ?? []),
+      ...(incoming.sources ?? []),
+    ]
+      .filter(
+        (source, index, sources) =>
+          sources.findIndex((other) => other.id === source.id) === index,
+      )
+      .slice(0, 24);
     const data = validateCanonicalTitle({
       ...incoming,
+      ...(existingData?.sources !== undefined || incoming.sources !== undefined
+        ? { sources: mergedSources }
+        : {}),
       ...(metadataIsFresh || existingData === null
         ? {}
         : {

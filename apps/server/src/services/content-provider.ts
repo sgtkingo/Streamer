@@ -36,6 +36,12 @@ export interface StreamerContentProvider {
     completedAt: string,
     context?: DiscoveryConversationContext,
   ): Promise<DiscoveryResponse>;
+  /** Deterministic metadata/media search with no agent invocation. */
+  discoverFast?(
+    request: DiscoveryRequest,
+    completedAt: string,
+    context?: DiscoveryConversationContext,
+  ): Promise<DiscoveryResponse>;
   /** Revalidate availability and mint a short-lived URL immediately before playback. */
   checkPlayback?(
     profileId: string,

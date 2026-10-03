@@ -94,6 +94,10 @@ export interface StreamerApi {
     request: DiscoveryRequest,
     signal?: AbortSignal,
   ): Promise<DiscoveryResponse>;
+  discoverFast?(
+    request: DiscoveryRequest,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryResponse>;
   cancelDiscovery(profileId: string, idempotencyKey: string): Promise<void>;
   getLibrary(profileId: string): Promise<LibraryResponse>;
   addToLibrary(profileId: string, titleId: string): Promise<LibraryResponse>;
@@ -441,6 +445,12 @@ export const apiClient: StreamerApi = {
     ),
   discover: (payload, signal) =>
     request<DiscoveryResponse>("/discovery/sessions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal,
+    }),
+  discoverFast: (payload, signal) =>
+    request<DiscoveryResponse>("/discovery/fast", {
       method: "POST",
       body: JSON.stringify(payload),
       signal,

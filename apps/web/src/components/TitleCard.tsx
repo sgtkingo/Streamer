@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo } from "react";
 import type { CatalogTitle, PlaybackPreferences } from "@streamer-ai/contracts";
 import type { EpisodeSelection } from "@streamer-ai/contracts";
 import {
   titleLanguageBadges,
   titleLanguageLabel,
 } from "../title-language-label";
-import { sourceLabel } from "../source-label";
 import type { PlaybackCheckState } from "./usePlaybackChecks";
 
 let cardHoverAudioContext: AudioContext | null = null;
@@ -118,24 +117,6 @@ export function TitleCard({
   pendingAction,
   playbackCheck,
 }: TitleCardProps) {
-  const [sourcesOpen, setSourcesOpen] = useState(false);
-  const sourcePickerRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!sourcesOpen) return;
-    const dismissOutside = (event: PointerEvent) => {
-      if (!sourcePickerRef.current?.contains(event.target as Node))
-        setSourcesOpen(false);
-    };
-    const dismissOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSourcesOpen(false);
-    };
-    document.addEventListener("pointerdown", dismissOutside);
-    document.addEventListener("keydown", dismissOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", dismissOutside);
-      document.removeEventListener("keydown", dismissOnEscape);
-    };
-  }, [sourcesOpen]);
   const playable = titleHasPlayableVariant(item);
   const checkStatus = playbackCheck?.status ?? "checking";
   const checkedLanguages =
@@ -171,10 +152,10 @@ export function TitleCard({
     item.progressPercent < 95;
   const playAction = (
     <>
-      <span className="title-card__play-icon" aria-hidden="true">
+      <span className="play-action__icon" aria-hidden="true">
         ▶
       </span>
-      <span className="title-card__play-label">
+      <span className="play-action__label">
         {hasSavedProgress ? "Continue" : "Play"}
       </span>
     </>
@@ -211,7 +192,10 @@ export function TitleCard({
         : checkStatus === "failed"
           ? "First episode unavailable · see episodes"
           : checkStatus === "ready"
-            ? `First episode ready · ${availabilityLabel(item)}`
+            ? item.availability === "available" ||
+              item.availability === "partial"
+              ? `First episode ready · ${availabilityLabel(item)}`
+              : "First episode ready on streaming source"
             : availabilityLabel(item)
       : playbackEnabled
         ? checkStatus === "checking"
@@ -336,6 +320,7 @@ export function TitleCard({
           {item.matchPercent !== null && (
             <span>Match {item.matchPercent}%</span>
           )}
+          {/* Keep source selection in the detail view; tiles only show the source count. */}
           {alternateSources.length > 1 && (
             <span>{alternateSources.length} sources</span>
           )}
@@ -467,46 +452,6 @@ export function TitleCard({
                       : playAction}
               </button>
             )
-          )}
-          {playbackEnabled && alternateSources.length > 1 && (
-            <div ref={sourcePickerRef} className="title-card__source-picker">
-              <button
-                className="button button--secondary button--compact title-card__source-trigger"
-                type="button"
-                aria-label={`More sources for ${item.title}`}
-                aria-expanded={sourcesOpen}
-                onClick={() => setSourcesOpen((open) => !open)}
-                disabled={pendingAction !== undefined}
-              >
-                <span aria-hidden="true">⋮</span>
-              </button>
-              {sourcesOpen && (
-                <div
-                  className="title-card__source-menu"
-                  role="group"
-                  aria-label={`Sources for ${item.title}`}
-                >
-                  <strong>Choose a source</strong>
-                  <small>Audio and subtitles are tied to each file.</small>
-                  {alternateSources.map((source, index) => (
-                    <button
-                      key={source.id}
-                      type="button"
-                      title={source.releaseName}
-                      onClick={() => {
-                        setSourcesOpen(false);
-                        onPlay(item, defaultEpisode, source.id);
-                      }}
-                    >
-                      <span>
-                        {index === 0 ? "Recommended" : `Source ${index + 1}`}
-                      </span>
-                      <small>{sourceLabel(source)}</small>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
           )}
           {playable && !playbackEnabled && item.kind !== "series" && (
             <button

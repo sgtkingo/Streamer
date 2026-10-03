@@ -191,13 +191,15 @@ textarea:not(:disabled):hover {
     0 0 36px rgb(255 255 255 / 16%);
 }
 
-.title-card__actions .button--play-action {
+.title-card__actions .button--play-action,
+.title-detail__actions .button--play-action,
+.title-detail__episode .button--play-action {
   position: relative;
   overflow: hidden;
   padding-left: 30px;
 }
 
-.title-card__play-icon {
+.play-action__icon {
   position: absolute;
   top: 50%;
   left: 10px;
@@ -208,21 +210,29 @@ textarea:not(:disabled):hover {
     transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.title-card__play-label {
+.play-action__label {
   display: inline-block;
   transition:
     opacity 180ms ease,
     transform 240ms ease;
 }
 
-.title-card__actions .button--play-action:hover .title-card__play-icon,
-.title-card__actions .button--play-action:focus .title-card__play-icon {
+.title-card__actions .button--play-action:hover .play-action__icon,
+.title-card__actions .button--play-action:focus .play-action__icon,
+.title-detail__actions .button--play-action:hover .play-action__icon,
+.title-detail__actions .button--play-action:focus .play-action__icon,
+.title-detail__episode .button--play-action:hover .play-action__icon,
+.title-detail__episode .button--play-action:focus .play-action__icon {
   left: 50%;
   transform: translate(-50%, -50%) scale(1.55);
 }
 
-.title-card__actions .button--play-action:hover .title-card__play-label,
-.title-card__actions .button--play-action:focus .title-card__play-label {
+.title-card__actions .button--play-action:hover .play-action__label,
+.title-card__actions .button--play-action:focus .play-action__label,
+.title-detail__actions .button--play-action:hover .play-action__label,
+.title-detail__actions .button--play-action:focus .play-action__label,
+.title-detail__episode .button--play-action:hover .play-action__label,
+.title-detail__episode .button--play-action:focus .play-action__label {
   opacity: 0;
   transform: scale(0.94);
 }
@@ -1751,12 +1761,54 @@ textarea:not(:disabled):hover {
   outline: 0;
   background: transparent;
   color: var(--white);
+  filter: none;
   font-size: clamp(16px, 2vw, 20px);
   line-height: 1.2;
 }
 
 .composer-form textarea::placeholder {
   color: #68686e;
+}
+
+.composer-form textarea:not(:disabled):hover {
+  filter: none;
+}
+
+.composer-submit-shell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  justify-self: end;
+  width: 54px;
+  height: 54px;
+  isolation: isolate;
+}
+
+.composer-submit-shell::before {
+  position: absolute;
+  z-index: -1;
+  inset: -7px;
+  border-radius: 50%;
+  background: conic-gradient(
+    #ff5b8b,
+    #65d6ff,
+    #f4d764,
+    #aa70ff,
+    #ff5b8b
+  );
+  content: "";
+  filter: blur(13px);
+  opacity: 0;
+  pointer-events: none;
+  transform: rotate(0deg);
+  transition: opacity 240ms ease-out;
+}
+
+.composer-submit-shell.is-searching::before {
+  animation:
+    composer-search-breathe 6s ease-in-out infinite,
+    composer-search-color 14s linear infinite;
+  will-change: opacity, transform;
 }
 
 .composer-submit {
@@ -1768,7 +1820,7 @@ textarea:not(:disabled):hover {
   height: 54px;
   aspect-ratio: 1;
   padding: 0;
-  border-radius: 4px;
+  border-radius: 12px;
   cursor: pointer;
   background: var(--white);
   color: var(--black);
@@ -1782,7 +1834,7 @@ textarea:not(:disabled):hover {
     opacity 280ms ease;
 }
 
-.composer-submit:not(:disabled):hover {
+.composer-submit:not(.is-searching):not(:disabled):hover {
   box-shadow:
     0 0 13px 3px #ff5b8b70,
     0 0 28px 8px #65d6ff55,
@@ -1821,14 +1873,11 @@ textarea:not(:disabled):hover {
   border-radius: 50%;
 }
 
-.composer-submit.is-searching:not(:disabled) {
-  animation: composer-search-pulse 1.8s ease-in-out infinite;
-}
-
-.composer-submit.is-searching:not(:disabled):hover {
-  animation:
-    composer-search-pulse 1.8s ease-in-out infinite,
-    composer-rainbow 2.8s linear infinite;
+.composer-submit.is-searching,
+.composer-submit.is-searching:hover,
+.composer-submit.is-searching:focus-visible {
+  box-shadow: none;
+  filter: none;
 }
 
 .composer-submit.is-searching .composer-submit__label {
@@ -1901,17 +1950,19 @@ textarea:not(:disabled):hover {
   }
 }
 
-@keyframes composer-search-pulse {
+@keyframes composer-search-breathe {
   0%,
   100% {
-    box-shadow:
-      0 0 6px 1px rgb(255 255 255 / 18%),
-      0 0 16px 3px rgb(255 255 255 / 10%);
+    opacity: 0;
   }
   50% {
-    box-shadow:
-      0 0 10px 2px rgb(255 255 255 / 42%),
-      0 0 26px 7px rgb(255 255 255 / 24%);
+    opacity: 0.68;
+  }
+}
+
+@keyframes composer-search-color {
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -2035,11 +2086,14 @@ textarea:not(:disabled):hover {
     transition-duration: 0.01ms;
   }
   .composer-submit:not(:disabled):hover,
-  .composer-submit.is-searching:not(:disabled),
+  .composer-submit-shell.is-searching::before,
   .composer-submit:not(.is-searching):active .composer-submit__gleam,
   .composer-submit.is-stopping .composer-submit__stop,
   .pipeline > span.is-active .pipeline__indicator {
     animation: none;
+  }
+  .composer-submit-shell.is-searching::before {
+    opacity: 0.45;
   }
   .agent-wake-notice__spark {
     animation: none;
@@ -3407,56 +3461,6 @@ textarea:not(:disabled):hover {
   align-items: center;
   gap: 8px;
   margin-top: 15px;
-}
-.title-card__source-picker {
-  display: contents;
-}
-.title-card__source-trigger {
-  width: 44px;
-  padding: 0;
-  font-size: 22px;
-  line-height: 1;
-}
-.title-card__source-menu {
-  display: grid;
-  flex: 1 0 100%;
-  order: 10;
-  gap: 6px;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid #43434b;
-  border-radius: 9px;
-  background: #1b1b1e;
-}
-.title-card__source-menu > strong {
-  color: #f2f2f4;
-  font-size: 12px;
-}
-.title-card__source-menu > small {
-  color: #a8a8b0;
-  font-size: 11px;
-}
-.title-card__source-menu button {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 5px 10px;
-  min-height: 39px;
-  padding: 8px 10px;
-  border: 1px solid #38383e;
-  border-radius: 6px;
-  background: #111113;
-  color: #f2f2f4;
-  cursor: pointer;
-  text-align: left;
-}
-.title-card__source-menu button:hover,
-.title-card__source-menu button:focus-visible {
-  border-color: #b7a3d4;
-  background: #2a2432;
-}
-.title-card__source-menu button small {
-  color: #bcbcc5;
 }
 .button--compact {
   min-width: 0;

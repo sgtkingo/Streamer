@@ -45,6 +45,29 @@ provider is disconnected.
 
 ## Discovery boundary
 
+The initial search now has two parallel lanes. A bounded fast lane queries the
+metadata API directly, ranks title similarity deterministically and validates
+its shortlist against the same metadata and media-provider pipeline as the
+deep lane, without invoking a model. The deep lane runs the existing Ollama
+proposal flow. Both share a discovery session; the UI merges their responses
+by canonical title ID and Stop aborts only the deep lane. Fast records remain
+available even when Ollama is unavailable. One merged "A considered shortlist"
+keeps an exact-title Fast hit visible without duplicating it in a separate
+Fast section.
+
+The UI preserves an unambiguous Fast exact-title match ahead of unrelated
+model suggestions, while Deep may improve the ranking of exploratory queries.
+Fusion retains verified playback and alternate sources from either lane,
+regardless of completion order. Fast hits with incomplete media checks stay
+unknown or checking rather than being prematurely called unavailable. Fast
+tries original/localized title queries with and without the year; reaching a
+provider-result or inspection budget without a source is not a definitive
+negative. If a later source check succeeds, the title is reclassified into
+the playable group for the current view without rewriting the stored discovery
+response or canonical title. The card reason is a user-facing explanation,
+not an implementation placeholder. Already-validated Fast matches can inform
+the agent when timing permits, but correct fusion never depends on that race.
+
 The model is a planner and ranker, not a fact database. A live coordinator must
 perform these stages:
 

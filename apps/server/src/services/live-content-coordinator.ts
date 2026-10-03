@@ -192,31 +192,31 @@ function discoveryReply(
   if (locale === "cs") {
     question = "Je to to, co sis představoval? Napiš mi, co mám změnit.";
     if (best !== null)
-      summary = `Nejlepší ověřený tip je ${best.title.title}. Níže jsou pouze tituly ověřené přes TMDB a Webshare.`;
+      summary = `Nejlepší ověřený tip je ${best.title.title}.`;
     else if (validatedCount > 0)
-      summary = `Našel jsem ${validatedCount} odpovídající tituly, ale Webshare u žádného nepotvrdil přehratelnou variantu.`;
+      summary = `Našel jsem ${validatedCount} odpovídající tituly, ale u žádného zatím nemám potvrzené přehrání.`;
     else
       summary =
-        "Našel jsem několik námětů, ale žádný se nepodařilo spolehlivě ověřit přes TMDB a Webshare.";
+        "Našel jsem několik námětů, ale žádný se nepodařilo spolehlivě ověřit.";
   } else if (locale === "de") {
     question =
       "Ist das, was du dir vorgestellt hast? Sag mir, was ich ändern soll.";
     if (best !== null)
-      summary = `Der beste geprüfte Tipp ist ${best.title.title}. Unten erscheinen nur über TMDB und Webshare geprüfte Titel.`;
+      summary = `Der beste geprüfte Tipp ist ${best.title.title}.`;
     else if (validatedCount > 0)
-      summary = `${validatedCount} passende Titel wurden gefunden, aber Webshare bestätigte keine abspielbare Variante.`;
+      summary = `${validatedCount} passende Titel wurden gefunden, aber für keinen ist die Wiedergabe bisher bestätigt.`;
     else
       summary =
-        "Einige Ideen wurden gefunden, aber keine konnte zuverlässig über TMDB und Webshare geprüft werden.";
+        "Einige Ideen wurden gefunden, aber keine konnte zuverlässig geprüft werden.";
   } else {
     question = "Is this what you had in mind? Tell me what to change.";
     if (best !== null)
-      summary = `The best validated match is ${best.title.title}. Only titles checked through TMDB and Webshare are shown below.`;
+      summary = `The best validated match is ${best.title.title}.`;
     else if (validatedCount > 0)
-      summary = `${validatedCount} matching titles were found, but Webshare did not confirm a playable variant for any of them.`;
+      summary = `${validatedCount} matching titles were found, but playback has not been confirmed for any of them.`;
     else
       summary =
-        "I found some ideas, but none could be validated reliably through TMDB and Webshare.";
+        "I found some ideas, but none could be validated reliably.";
   }
   return `${acknowledgement ? `${acknowledgement} ` : ""}${summary} ${question}`;
 }
@@ -247,7 +247,8 @@ function titleMatchesRelease(
     .filter((value): value is string => value !== null)
     .map(normalize);
   const matchingTitle = alternatives.some((alternative) => {
-    if (release.includes(alternative)) return true;
+    if (alternative !== "" && ` ${release} `.includes(` ${alternative} `))
+      return true;
     const titleWords = words(alternative);
     if (titleWords.length === 0) return false;
     const releaseWords = new Set(words(release));
@@ -292,6 +293,67 @@ function metadataScore(
   return titleScore + yearScore + candidate.confidence * 10;
 }
 
+const FAST_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "for",
+  "film",
+  "filmy",
+  "filmů",
+  "movie",
+  "movies",
+  "na",
+  "nejaky",
+  "nejaký",
+  "o",
+  "pro",
+  "se",
+  "serial",
+  "seriál",
+  "show",
+  "the",
+  "to",
+  "with",
+  "want",
+  "chci",
+  "mam",
+  "mám",
+]);
+
+function fastSimilarity(
+  message: string,
+  candidate: MetadataCandidate,
+  position: number,
+): number {
+  const query = normalize(message);
+  const titles = [candidate.title, candidate.originalTitle]
+    .filter((value): value is string => value !== null)
+    .map(normalize);
+  const terms = words(message).filter((term) => !FAST_STOP_WORDS.has(term));
+  const overlap = Math.max(
+    0,
+    ...titles.map((title) => {
+      const titleTerms = new Set(words(title));
+      return terms.filter((term) => titleTerms.has(term)).length;
+    }),
+  );
+  const exact = titles.some((title) => title === query);
+  const contains = titles.some(
+    (title) => query.includes(title) || title.includes(query),
+  );
+  const year = /\b(?:19|20)\d{2}\b/.exec(message)?.[0];
+  const yearBonus = year && candidate.year === Number(year) ? 8 : 0;
+  return Math.min(
+    98,
+    exact
+      ? 98
+      : contains
+        ? 80 + yearBonus
+        : 35 + overlap * 15 + yearBonus + Math.max(0, 9 - position),
+  );
+}
+
 function accentColor(id: string): string {
   const digest = createHash("sha256").update(id).digest();
   const channels = [...digest.subarray(0, 3)].map((value) => 48 + (value % 96));
@@ -326,6 +388,32 @@ function episodeNumber(
   const episode = Number(match[2]);
   if (episode < 1) return null;
   return { season: Number(match[1]), episode };
+}
+
+function mediaSearchVariants(
+  title: string,
+  originalTitle: string | null,
+  year: number | null,
+  episode?: EpisodeSelection,
+): { originalTitle: string | null; year: number | null }[] {
+  const distinctLocalizedTitle =
+    originalTitle !== null && normalize(originalTitle) !== normalize(title);
+  // Webshare's episode query already omits the premiere year.
+  const searchYear = episode ? null : year;
+  return [
+    { originalTitle, year: searchYear },
+    ...(distinctLocalizedTitle
+      ? [{ originalTitle: null, year: searchYear }]
+      : []),
+    ...(searchYear === null
+      ? []
+      : [
+          { originalTitle, year: null },
+          ...(distinctLocalizedTitle
+            ? [{ originalTitle: null, year: null }]
+            : []),
+        ]),
+  ];
 }
 
 function providerContext(
@@ -441,7 +529,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     conversation?: DiscoveryConversationContext,
   ): Promise<DiscoveryResponse> {
     conversation?.signal?.throwIfAborted();
-    const missing = await this.missingRequiredIntegrations();
+    const missing = await this.missingRequiredIntegrations(true);
     conversation?.signal?.throwIfAborted();
     if (missing.length > 0) {
       return DiscoveryResponseSchema.parse({
@@ -477,13 +565,15 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       return {
         role: message.role,
         content:
-          typeof data?.message === "string"
-            ? data.message
-            : typeof data?.reply === "string"
-              ? `${data.reply}${previousTitles.length ? ` Previously suggested: ${previousTitles.join(", ")}.` : ""}`
-              : typeof message.content === "string"
-                ? message.content
-                : JSON.stringify(message.content),
+          data?.stage === "quick" && previousTitles.length > 0
+            ? `Deterministic TMDB quick search found these title candidates: ${previousTitles.join(", ")}. They are metadata matches, not proof of playback or preference fit. For a direct title query, include an exact matching title unless the user has ruled it out.`
+            : typeof data?.message === "string"
+              ? data.message
+              : typeof data?.reply === "string"
+                ? `${data.reply}${previousTitles.length ? ` Previously suggested: ${previousTitles.join(", ")}.` : ""}`
+                : typeof message.content === "string"
+                  ? message.content
+                  : JSON.stringify(message.content),
       };
     });
     const generation = await this.#agent.generateStructured<unknown>(
@@ -492,7 +582,11 @@ export class LiveContentCoordinator implements StreamerContentProvider {
         messages: [
           {
             role: "system",
-            content: `You propose films and series for a ${locale} user. The latest message may be feedback on an earlier shortlist: keep the user's original preferences unless revised, apply objections, and avoid previously suggested titles the user rejected. Put only currently required people in the people array; omit people the user rejected. Return exactly 6 real, correctly spelled candidate titles that best satisfy the latest request and conversation. Every candidate must actually feature each currently required person. Prefer well-known titles when uncertain. Use your knowledge only to propose title, kind, approximate release year, a short preference-based reason, and match score. Add a brief acknowledgement in the user's language that responds to their latest preference or objection; do not name unvalidated titles or claim availability, ratings, or other unverified facts in it. Do not invent metadata, availability, ratings, people, or URLs. Output only the requested JSON.`,
+            content: `You propose films and series for a ${locale} user. The latest message may be feedback on an earlier shortlist: keep the user's original preferences unless revised, apply objections, and avoid previously suggested titles the user rejected. A quick-search note, if present, lists deterministic TMDB title candidates; it is not a user rejection or a reason to avoid those titles. Give an exact quick-search title strong consideration for a direct title query, while still respecting every user constraint. Put only currently required people in the people array; omit people the user rejected. Return exactly 6 real, correctly spelled candidate titles that best satisfy the latest request and conversation. Every candidate must actually feature each currently required person. Prefer well-known titles when uncertain. Use your knowledge only to propose title, kind, approximate release year, a short preference-based reason, and match score. Add a brief acknowledgement in the user's language that responds to their latest preference or objection; do not name unvalidated titles or claim availability, ratings, or other unverified facts in it. Do not invent metadata, availability, ratings, people, or URLs. Output only the requested JSON.`,
+          },
+          {
+            role: "system",
+            content: "The acknowledgement and every candidate reason are shown directly to the user. Describe the recommendation in natural language without naming metadata services, streaming providers, websites, APIs, search tools, or internal validation steps. Never mention TMDB, Webshare, or any other source in these user-facing fields.",
           },
           ...history,
           ...(history.some(
@@ -559,24 +653,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
         title: { ...best.ranked.title, matchPercent: highestOther },
       };
     }
-    for (const item of validated) {
-      if (item.playbackCandidates.length > 0) {
-        this.#playbackCandidates.set(
-          item.ranked.title.id,
-          item.playbackCandidates,
-        );
-      }
-      if (item.ranked.title.kind === "series") {
-        this.#seriesJobs.set(item.ranked.title.id, {
-          structure: item.seriesStructure,
-          candidates: item.episodeCandidates ?? new Map(),
-          running: false,
-          failed: false,
-          finished: false,
-        });
-        void this.getSeriesDetail(request.profileId, item.ranked.title);
-      }
-    }
+    this.rememberValidated(request.profileId, validated);
 
     return DiscoveryResponseSchema.parse({
       sessionId: request.sessionId,
@@ -601,27 +678,219 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     });
   }
 
+  async discoverFast(
+    request: DiscoveryRequest,
+    completedAt: string,
+    conversation?: DiscoveryConversationContext,
+  ): Promise<DiscoveryResponse> {
+    conversation?.signal?.throwIfAborted();
+    const missing = await this.missingRequiredIntegrations(false);
+    if (missing.length > 0) {
+      return DiscoveryResponseSchema.parse({
+        sessionId: request.sessionId,
+        mode: "live",
+        stage: "needs-setup",
+        reply: `Connect ${missing.join(" and ")} to show quick matches.`,
+        bestMatch: null,
+        available: [],
+        unavailable: [],
+        unverified: [],
+        warnings: [],
+        completedAt,
+      });
+    }
+    const context = providerContext(
+      request,
+      this.#localeForProfile(request.profileId),
+      this.#now(),
+      conversation?.signal,
+    );
+    const locale = context.locale;
+    let matches: MetadataCandidate[] = [];
+    try {
+      matches = await this.#metadata.search(
+        {
+          query: request.message.slice(0, 500),
+          kind: null,
+          year: null,
+          person: null,
+          locale,
+          limit: 12,
+        },
+        context,
+      );
+    } catch {
+      context.signal?.throwIfAborted();
+      // A feed can still provide a provisional starting point when search fails.
+    }
+    context.signal?.throwIfAborted();
+    let usedFallback = false;
+    if (matches.length === 0) {
+      usedFallback = true;
+      matches = await this.#metadata.getFeed(
+        {
+          feed: "trending",
+          kind: null,
+          locale,
+          region: null,
+          from: null,
+          to: null,
+          limit: 12,
+        },
+        context,
+      );
+    }
+    context.signal?.throwIfAborted();
+    const ranked = matches
+      .map((candidate, position) => ({
+        candidate,
+        score: fastSimilarity(request.message, candidate, position),
+      }))
+      // Even a provider hit (and especially a trending fallback) can be
+      // unrelated to a conversational request. Let the agent handle those.
+      .filter((item) => item.score >= 55)
+      .sort((a, b) => b.score - a.score)
+      .filter(
+        (item, index, items) =>
+          items.findIndex(
+            (other) =>
+              other.candidate.ref.providerId ===
+                item.candidate.ref.providerId &&
+              other.candidate.ref.externalId ===
+                item.candidate.ref.externalId &&
+              other.candidate.kind === item.candidate.kind,
+          ) === index,
+      )
+      .slice(0, 2);
+    const validated = (
+      await Promise.all(
+        ranked.map(async ({ candidate, score }) => {
+          try {
+            return await this.validateResolvedCandidate(
+              candidate,
+              score,
+              usedFallback
+                ? "A popular suggestion."
+                : score >= 98
+                  ? "Exact title match."
+                  : "Similar title match.",
+              context,
+              12,
+              3,
+            );
+          } catch {
+            context.signal?.throwIfAborted();
+            return null;
+          }
+        }),
+      )
+    ).filter((item): item is ValidatedCandidate => item !== null);
+    context.signal?.throwIfAborted();
+    this.rememberValidated(request.profileId, validated, false);
+    const available = validated
+      .filter((item) =>
+        ["available", "partial"].includes(item.ranked.title.availability),
+      )
+      .sort(
+        (a, b) =>
+          (b.ranked.title.matchPercent ?? 0) -
+          (a.ranked.title.matchPercent ?? 0),
+      );
+    const best = available.shift() ?? null;
+    const highestOther = Math.max(
+      0,
+      ...validated
+        .filter((item) => item !== best)
+        .map((item) => item.ranked.title.matchPercent ?? 0),
+    );
+    if (best && (best.ranked.title.matchPercent ?? 0) < highestOther) {
+      best.ranked = {
+        ...best.ranked,
+        title: { ...best.ranked.title, matchPercent: highestOther },
+      };
+    }
+    return DiscoveryResponseSchema.parse({
+      sessionId: request.sessionId,
+      mode: "live",
+      stage: "completed",
+      reply: validated.length
+        ? "Quick suggestions are ready. A closer look may refine them."
+        : "No confident quick match yet. A closer look may find better options.",
+      bestMatch: best?.ranked ?? null,
+      available: available.map((item) => item.ranked),
+      unavailable: validated
+        .filter((item) => item.ranked.title.availability === "unavailable")
+        .map((item) => item.ranked),
+      unverified: validated
+        .filter((item) => item.ranked.title.availability === "unknown")
+        .map((item) => item.ranked),
+      warnings: [],
+      completedAt,
+    });
+  }
+
+  private rememberValidated(
+    profileId: string,
+    validated: ValidatedCandidate[],
+    startSeriesSearch = true,
+  ): void {
+    for (const item of validated) {
+      if (item.playbackCandidates.length > 0) {
+        const previous =
+          this.#playbackCandidates.get(item.ranked.title.id) ?? [];
+        if (item.playbackCandidates.length >= previous.length) {
+          this.#playbackCandidates.set(
+            item.ranked.title.id,
+            item.playbackCandidates,
+          );
+        }
+      }
+      if (item.ranked.title.kind === "series") {
+        const previous = this.#seriesJobs.get(item.ranked.title.id);
+        if (previous) {
+          for (const [key, refs] of item.episodeCandidates ?? []) {
+            const known = previous.candidates.get(key) ?? [];
+            if (refs.length > known.length) previous.candidates.set(key, refs);
+          }
+          previous.structure ??= item.seriesStructure;
+        } else {
+          this.#seriesJobs.set(item.ranked.title.id, {
+            structure: item.seriesStructure,
+            candidates: item.episodeCandidates ?? new Map(),
+            running: false,
+            failed: false,
+            finished: false,
+          });
+        }
+        if (startSeriesSearch)
+          void this.getSeriesDetail(profileId, item.ranked.title);
+      }
+    }
+  }
+
   async checkPlayback(
     profileId: string,
     title: CatalogTitle,
     episode?: EpisodeSelection,
     sourceId?: string,
   ): Promise<PlaybackLanguageAvailability | void> {
-    const { candidates, context } = await this.playbackCandidates(
-      profileId,
-      title,
-      episode,
-      sourceId,
-    );
     if (this.#media.checkPlayback === undefined) {
       throw new Error("The media source does not support playback checks.");
     }
     let lastError: unknown = new Error(
       "No playback candidate remains available.",
     );
-    for (const candidate of candidates) {
+    for await (const { candidate, context } of this.playbackCandidates(
+      profileId,
+      title,
+      episode,
+      sourceId,
+    )) {
       try {
-        return await this.#media.checkPlayback(candidate, context);
+        const languages = await this.#media.checkPlayback(candidate, context);
+        if (sourceId === undefined)
+          this.rememberPlaybackCandidate(title, episode, candidate);
+        return languages;
       } catch (error) {
         lastError = error;
       }
@@ -635,21 +904,18 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     episode?: EpisodeSelection,
     sourceId?: string,
   ) {
-    const { candidates, context } = await this.playbackCandidates(
+    let lastError: unknown = new Error(
+      "No playback candidate remains available.",
+    );
+    for await (const { candidate, context } of this.playbackCandidates(
       profileId,
       title,
       episode,
       sourceId,
-    );
-    if (candidates.length === 0)
-      throw new Error("No playback candidate remains available.");
-    let lastError: unknown = new Error(
-      "No playback candidate remains available.",
-    );
-    for (const candidate of candidates) {
+    )) {
       try {
         const variant = await this.#media.inspect(candidate, context);
-        return await this.#media.createPlayback(
+        const playback = await this.#media.createPlayback(
           {
             profileId,
             titleId: title.id,
@@ -660,6 +926,9 @@ export class LiveContentCoordinator implements StreamerContentProvider {
           },
           context,
         );
+        if (sourceId === undefined)
+          this.rememberPlaybackCandidate(title, episode, candidate);
+        return playback;
       } catch (error) {
         lastError = error;
       }
@@ -738,7 +1007,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     title: CatalogTitle,
     job: SeriesSearchJob,
   ): Promise<void> {
-    const { context } = await this.playbackCandidates(profileId, title);
+    const context = this.playbackContext(profileId, title);
     let hadErrors = false;
     if (!job.structure) {
       const externalId = /^sai:tmdb:series:(\d+)$/.exec(title.id)?.[1];
@@ -815,19 +1084,63 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     job.failed = hadErrors;
   }
 
-  private async playbackCandidates(
+  private rememberPlaybackCandidate(
+    title: CatalogTitle,
+    episode: EpisodeSelection | undefined,
+    candidate: MediaCandidateRef,
+  ): void {
+    const sameRef = (item: MediaCandidateRef) =>
+      item.providerId === candidate.providerId &&
+      item.candidateId === candidate.candidateId;
+    if (episode) {
+      let job = this.#seriesJobs.get(title.id);
+      if (!job) {
+        job = {
+          candidates: new Map(),
+          running: false,
+          failed: false,
+          finished: false,
+        };
+        this.#seriesJobs.set(title.id, job);
+      }
+      const key = episodeKey(title.id, episode);
+      job.candidates.set(key, [
+        candidate,
+        ...(job.candidates.get(key) ?? []).filter((item) => !sameRef(item)),
+      ]);
+    } else {
+      this.#playbackCandidates.set(title.id, [
+        candidate,
+        ...(this.#playbackCandidates.get(title.id) ?? []).filter(
+          (item) => !sameRef(item),
+        ),
+      ]);
+    }
+  }
+
+  private playbackContext(
     profileId: string,
     title: CatalogTitle,
-    episode?: EpisodeSelection,
-    sourceId?: string,
-  ) {
+  ): ProviderContext {
     const locale = this.#localeForProfile(profileId);
     const request: DiscoveryRequest = {
       profileId,
       message: title.title,
       idempotencyKey: `playback-${createHash("sha256").update(`${profileId}:${title.id}:${this.#now().toISOString()}`).digest("hex").slice(0, 24)}`,
     };
-    const context = providerContext(request, locale, this.#now());
+    return providerContext(request, locale, this.#now());
+  }
+
+  private async *playbackCandidates(
+    profileId: string,
+    title: CatalogTitle,
+    episode?: EpisodeSelection,
+    sourceId?: string,
+  ): AsyncGenerator<{
+    candidate: MediaCandidateRef;
+    context: ProviderContext;
+  }> {
+    const context = this.playbackContext(profileId, title);
     const storedSources = (title.sources ?? []).filter((source) =>
       episode
         ? source.seasonNumber === episode.seasonNumber &&
@@ -838,15 +1151,14 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       const selected = storedSources.find((source) => source.id === sourceId);
       if (!selected)
         throw new Error("Selected source is not part of this title.");
-      return {
-        candidates: [
-          {
-            providerId: selected.providerId,
-            candidateId: selected.candidateId,
-          },
-        ],
+      yield {
+        candidate: {
+          providerId: selected.providerId,
+          candidateId: selected.candidateId,
+        },
         context,
       };
+      return;
     }
     let candidates = episode
       ? (this.#seriesJobs
@@ -859,14 +1171,24 @@ export class LiveContentCoordinator implements StreamerContentProvider {
         candidateId: source.candidateId,
       }));
     }
-    if (candidates.length === 0) {
+    if (candidates.length > 0) {
+      for (const candidate of candidates) yield { candidate, context };
+      return;
+    }
+    const seenRefs = new Set<string>();
+    for (const search of mediaSearchVariants(
+      title.title,
+      title.originalTitle,
+      title.year,
+      episode,
+    )) {
       const results = await this.#media.search(
         {
           titleId: title.id,
           kind: title.kind,
           title: title.title,
-          originalTitle: title.originalTitle,
-          year: title.year,
+          originalTitle: search.originalTitle,
+          year: search.year,
           seasonNumber: episode?.seasonNumber ?? null,
           episodeNumber: episode?.episodeNumber ?? null,
           externalRefs: [],
@@ -874,43 +1196,49 @@ export class LiveContentCoordinator implements StreamerContentProvider {
         },
         context,
       );
-      candidates = results
-        .filter(
-          (item) =>
-            titleMatchesRelease(
-              item,
-              title.title,
-              title.originalTitle,
-              title.kind === "series" ? null : title.year,
-            ) &&
-            (episode === undefined ||
-              (() => {
-                const parsed = episodeNumber(item.releaseName);
-                return (
-                  parsed?.season === episode.seasonNumber &&
-                  parsed.episode === episode.episodeNumber
-                );
-              })()),
+      let yielded = 0;
+      for (const item of results) {
+        if (
+          !titleMatchesRelease(
+            item,
+            title.title,
+            title.originalTitle,
+            title.kind === "series" ? null : title.year,
+          )
         )
-        .slice(0, 12)
-        .map((item) => item.ref);
-      if (episode && candidates.length > 0) {
-        const job = this.#seriesJobs.get(title.id);
-        job?.candidates.set(episodeKey(title.id, episode), candidates);
+          continue;
+        const parsed =
+          title.kind === "series" ? episodeNumber(item.releaseName) : null;
+        if (
+          title.kind === "series" &&
+          (parsed === null ||
+            (episode &&
+              (parsed.season !== episode.seasonNumber ||
+                parsed.episode !== episode.episodeNumber)))
+        )
+          continue;
+        const refKey = `${item.ref.providerId}:${item.ref.candidateId}`;
+        if (seenRefs.has(refKey)) continue;
+        if (yielded >= 12) break;
+        seenRefs.add(refKey);
+        yielded += 1;
+        yield { candidate: item.ref, context };
       }
     }
-    return { candidates, context };
   }
 
-  private async missingRequiredIntegrations(): Promise<string[]> {
+  private async missingRequiredIntegrations(
+    includeAgent: boolean,
+  ): Promise<string[]> {
+    const ids = includeAgent
+      ? ["tmdb", "webshare", "ollama"]
+      : ["tmdb", "webshare"];
     const states = await Promise.all(
-      ["tmdb", "webshare", "ollama"].map((id) =>
-        this.#integrationStateStore.get(id),
-      ),
+      ids.map((id) => this.#integrationStateStore.get(id)),
     );
-    return ["TMDB", "Webshare", "Ollama"].filter(
-      (_name, index) => states[index]?.configured !== true,
-    );
+    return (
+      includeAgent ? ["TMDB", "Webshare", "Ollama"] : ["TMDB", "Webshare"]
+    ).filter((_name, index) => states[index]?.configured !== true);
   }
 
   private async validateCandidate(
@@ -936,14 +1264,24 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       }))
       .sort((a, b) => b.score - a.score)[0];
     if (selected === undefined || selected.score < 60) return null;
-    const metadata = await this.#metadata.getTitle(
-      selected.candidate.ref,
+    return this.validateResolvedCandidate(
+      selected.candidate,
+      agent.matchPercent,
+      agent.reason,
       context,
     );
-    const ratings = await this.#metadata.getRatings(
-      selected.candidate.ref,
-      context,
-    );
+  }
+
+  private async validateResolvedCandidate(
+    selected: MetadataCandidate,
+    matchPercent: number,
+    reason: string,
+    context: ProviderContext,
+    maxMediaCandidates = 12,
+    desiredPlayableSources = maxMediaCandidates,
+  ): Promise<ValidatedCandidate> {
+    const metadata = await this.#metadata.getTitle(selected.ref, context);
+    const ratings = await this.#metadata.getRatings(selected.ref, context);
     const titleId = `sai:tmdb:${metadata.kind}:${metadata.ref.externalId}`;
     const checkedAt = this.#now().toISOString();
     let availability: CatalogTitle["availability"] = "unknown";
@@ -962,46 +1300,72 @@ export class LiveContentCoordinator implements StreamerContentProvider {
     let seriesStructure: SeriesStructure | undefined;
     const episodeCandidates = new Map<string, MediaCandidateRef[]>();
     try {
-      const mediaCandidates = await this.#media.search(
-        {
-          titleId,
-          kind: metadata.kind,
-          title: metadata.title,
-          originalTitle: metadata.originalTitle,
-          year: metadata.year,
-          seasonNumber: null,
-          episodeNumber: null,
-          externalRefs: [metadata.ref],
-          limit: metadata.kind === "series" ? 50 : 20,
-        },
-        context,
+      // Search APIs often treat the year as a required term, while uploaded
+      // releases (especially episodes) omit it. Try progressively broader,
+      // still title-validated queries before declaring the title unavailable.
+      const searches = mediaSearchVariants(
+        metadata.title,
+        metadata.originalTitle,
+        metadata.year,
       );
-      const matching = mediaCandidates.filter((candidate) =>
-        titleMatchesRelease(
-          candidate,
-          metadata.title,
-          metadata.originalTitle,
-          metadata.kind === "series" ? null : metadata.year,
-        ),
-      );
-      const inspected = [];
-      for (const candidate of matching.slice(0, 12)) {
+      const inspected: {
+        candidate: MediaCandidate;
+        variant: Awaited<ReturnType<MediaProvider["inspect"]>>;
+      }[] = [];
+      const seenCandidates = new Set<string>();
+      let searchExhausted = true;
+      for (const search of searches) {
         context.signal?.throwIfAborted();
-        if (
-          metadata.kind === "series" &&
-          episodeNumber(candidate.releaseName) === null
-        ) {
-          continue;
-        }
-        try {
-          inspected.push({
-            candidate,
-            variant: await this.#media.inspect(candidate.ref, context),
-          });
-        } catch {
+        const searchLimit = metadata.kind === "series" ? 50 : 20;
+        const mediaCandidates = await this.#media.search(
+          {
+            titleId,
+            kind: metadata.kind,
+            title: metadata.title,
+            originalTitle: search.originalTitle,
+            year: search.year,
+            seasonNumber: null,
+            episodeNumber: null,
+            externalRefs: [metadata.ref],
+            limit: searchLimit,
+          },
+          context,
+        );
+        if (mediaCandidates.length >= searchLimit) searchExhausted = false;
+        const matching = mediaCandidates.filter(
+          (candidate) =>
+            titleMatchesRelease(
+              candidate,
+              metadata.title,
+              metadata.originalTitle,
+              metadata.kind === "series" ? null : metadata.year,
+            ) &&
+            (metadata.kind !== "series" ||
+              episodeNumber(candidate.releaseName) !== null),
+        );
+        let attempted = 0;
+        for (const candidate of matching) {
           context.signal?.throwIfAborted();
-          // A rejected/restricted file is not playable and is skipped.
+          const key = `${candidate.ref.providerId}:${candidate.ref.candidateId}`;
+          if (seenCandidates.has(key)) continue;
+          if (attempted >= maxMediaCandidates) {
+            searchExhausted = false;
+            break;
+          }
+          seenCandidates.add(key);
+          attempted += 1;
+          try {
+            inspected.push({
+              candidate,
+              variant: await this.#media.inspect(candidate.ref, context),
+            });
+          } catch {
+            context.signal?.throwIfAborted();
+            // A rejected/restricted file is not playable and is skipped.
+          }
+          if (inspected.length >= desiredPlayableSources) break;
         }
+        if (inspected.length > 0) break;
       }
       if (inspected.length > 0) {
         const seenRefs = new Set<string>();
@@ -1095,12 +1459,14 @@ export class LiveContentCoordinator implements StreamerContentProvider {
           availability = complete ? "available" : "partial";
         }
       } else {
-        availability = "unavailable";
-        availabilityProvenance = {
-          ...availabilityProvenance,
-          confidence: 1,
-          validationState: "verified",
-        };
+        availability = searchExhausted ? "unavailable" : "unknown";
+        if (searchExhausted) {
+          availabilityProvenance = {
+            ...availabilityProvenance,
+            confidence: 1,
+            validationState: "verified",
+          };
+        }
       }
     } catch {
       context.signal?.throwIfAborted();
@@ -1119,7 +1485,7 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       accentColor: accentColor(titleId),
       genres: metadata.genres,
       ratings,
-      matchPercent: agent.matchPercent,
+      matchPercent,
       availability,
       availabilityProvider: "webshare",
       availabilityCheckedAt: checkedAt,
@@ -1129,14 +1495,21 @@ export class LiveContentCoordinator implements StreamerContentProvider {
       metadataProvider: "tmdb",
       metadataValidatedAt:
         metadata.fieldProvenance.title?.retrievedAt ?? checkedAt,
-      metadataProvenance:
-        metadata.fieldProvenance.title ?? selected.candidate.provenance,
+      metadataProvenance: metadata.fieldProvenance.title ?? selected.provenance,
       availabilityProvenance,
       inLibrary: false,
       progressPercent: null,
     });
+    const groundedReason =
+      reason === "Exact title match." &&
+      ![metadata.title, metadata.originalTitle].some(
+        (name) =>
+          name !== null && normalize(name) === normalize(selected.title),
+      )
+        ? "Similar title match."
+        : reason;
     return {
-      ranked: { title, reason: agent.reason },
+      ranked: { title, reason: groundedReason },
       playbackCandidates,
       seriesStructure,
       episodeCandidates,

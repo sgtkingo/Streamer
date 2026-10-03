@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -734,6 +734,443 @@ describe("conversational Home", () => {
       within(results).getByRole("button", { name: /add to library/i }),
     );
     expect(api.addToLibrary).toHaveBeenCalledWith("default", title.id);
+  });
+
+  it("shows quick API matches while deep discovery runs and merges canonical duplicates", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.getHome).mockResolvedValue({
+      profileId: "default",
+      mode: "live",
+      generatedAt: "2026-09-27T12:00:00.000Z",
+      sections: [],
+    });
+    const quick = {
+      sessionId: "parallel-session",
+      mode: "live" as const,
+      stage: "completed" as const,
+      reply: "Quick matches are ready.",
+      bestMatch: { title, reason: "Quick similarity match." },
+      available: [],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    };
+    api.discoverFast = vi.fn().mockResolvedValue(quick);
+    let finishDeep!: (
+      value: Awaited<ReturnType<StreamerApi["discover"]>>,
+    ) => void;
+    vi.mocked(api.discover).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishDeep = resolve;
+        }),
+    );
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(
+      screen.getByLabelText(/ask streamerai/i),
+      "a romantic film",
+    );
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+
+    expect(
+      await screen.findByText("Quick similarity match."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Stop search" }),
+    ).toBeInTheDocument();
+    const quickRequest = vi.mocked(api.discoverFast).mock.calls[0]![0];
+    const deepRequest = vi.mocked(api.discover).mock.calls[0]![0];
+    expect(deepRequest).toMatchObject({
+      sessionId: quickRequest.sessionId,
+      idempotencyKey: quickRequest.idempotencyKey,
+      createSession: true,
+    });
+
+    const second = {
+      ...title,
+      id: "sai:title:second",
+      title: "Second Film",
+      matchPercent: 81,
+    };
+    finishDeep({
+      ...quick,
+      reply: "I found a richer shortlist. Is this what you had in mind?",
+      bestMatch: { title, reason: "Contextual match." },
+      available: [{ title: second, reason: "Another validated option." }],
+    });
+    expect(await screen.findByText("Contextual match.")).toBeInTheDocument();
+    const results = screen.getByRole("region", {
+      name: /a considered shortlist/i,
+    });
+    expect(
+      within(results).getAllByRole("heading", { name: "The Lake House" }),
+    ).toHaveLength(1);
+    expect(
+      within(results).getByRole("heading", { name: "Second Film" }),
+    ).toBeInTheDocument();
+  });
+
+  it("checks a provisional fast match and promotes it when the streaming source succeeds", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.getHome).mockResolvedValue({
+      profileId: "default",
+      mode: "live",
+      generatedAt: "2026-09-27T12:00:00.000Z",
+      sections: [],
+    });
+    const provisionalTitle = {
+      ...title,
+      availability: "unknown" as const,
+      availabilityProvider: null,
+      availabilityCheckedAt: null,
+      formats: [],
+    };
+    api.discoverFast = vi.fn().mockResolvedValue({
+      sessionId: "fast-promoted",
+      mode: "live",
+      stage: "completed",
+      reply: "Checking the streaming source.",
+      bestMatch: null,
+      available: [],
+      unavailable: [],
+      unverified: [
+        {
+          title: provisionalTitle,
+          reason: "Exact title match from TMDB.",
+        },
+      ],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+    vi.mocked(api.discover).mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+    let finishCheck!: () => void;
+    vi.mocked(api.checkPlayback).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishCheck = () =>
+            resolve({
+              ok: true,
+              audioLanguages: ["en"],
+              subtitleLanguages: ["cs"],
+            });
+        }),
+    );
+
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(screen.getByLabelText(/ask streamerai/i), "The Lake House");
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+
+    await waitFor(() =>
+      expect(api.checkPlayback).toHaveBeenCalledWith(
+        "default",
+        provisionalTitle.id,
+        undefined,
+      ),
+    );
+    const checkingGroup = screen
+      .getByRole("heading", { name: "Checking availability" })
+      .closest(".result-group");
+    expect(checkingGroup).not.toBeNull();
+    expect(
+      within(checkingGroup as HTMLElement).getByRole("heading", {
+        name: "The Lake House",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Checking" })).toBeDisabled();
+
+    finishCheck();
+    await waitFor(() => {
+      const card = screen
+        .getByRole("heading", { name: "The Lake House" })
+        .closest("article");
+      expect(card).not.toBeNull();
+      expect(
+        card?.classList.contains("title-card--hero") ||
+          card?.closest(".result-group")?.querySelector("h3")?.textContent ===
+            "Available to stream",
+      ).toBe(true);
+      expect(
+        within(card as HTMLElement).getByRole("button", { name: "Play" }),
+      ).toBeEnabled();
+      expect(
+        screen.queryByRole("heading", { name: "Checking availability" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", {
+          name: "Found, not currently available",
+        }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("fuses a late exact fast hit with deep results without duplicate tiles", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.getHome).mockResolvedValue({
+      profileId: "default",
+      mode: "live",
+      generatedAt: "2026-09-27T12:00:00.000Z",
+      sections: [],
+    });
+    const panTau = {
+      ...title,
+      id: "sai:tmdb:tv:pan-tau",
+      title: "Pan Tau",
+      matchPercent: 83,
+    };
+    const wrongSuggestion = {
+      ...title,
+      id: "sai:tmdb:movie:unrelated",
+      title: "The Magic Hat",
+      matchPercent: 99,
+    };
+    let finishFast!: (
+      value: Awaited<ReturnType<NonNullable<StreamerApi["discoverFast"]>>>,
+    ) => void;
+    api.discoverFast = vi.fn().mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFast = resolve;
+        }),
+    );
+    vi.mocked(api.discover).mockResolvedValueOnce({
+      sessionId: "deep-first",
+      mode: "live",
+      stage: "completed",
+      reply: "A contextual shortlist.",
+      bestMatch: { title: wrongSuggestion, reason: "Agent suggestion." },
+      available: [{ title: panTau, reason: "Agent also found this title." }],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(screen.getByLabelText(/ask streamerai/i), "Pan Tau");
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+    const results = await screen.findByRole("region", {
+      name: /a considered shortlist/i,
+    });
+    expect(
+      within(results).getByRole("heading", { name: "The Magic Hat" }),
+    ).toBeInTheDocument();
+
+    finishFast({
+      sessionId: "deep-first",
+      mode: "live",
+      stage: "completed",
+      reply: "Exact database match.",
+      bestMatch: { title: panTau, reason: "Exact title match." },
+      available: [],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+    await waitFor(() =>
+      expect(
+        within(results)
+          .getByRole("heading", { name: "Pan Tau" })
+          .closest("article"),
+      ).toHaveClass("title-card--hero"),
+    );
+    expect(
+      within(results).getAllByRole("heading", { name: "Pan Tau" }),
+    ).toHaveLength(1);
+    expect(
+      within(results).getAllByRole("heading", { name: "The Magic Hat" }),
+    ).toHaveLength(1);
+  });
+
+  it("does not replace a chat refinement with a late initial fast response", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.getHome).mockResolvedValue({
+      profileId: "default",
+      mode: "live",
+      generatedAt: "2026-09-27T12:00:00.000Z",
+      sections: [],
+    });
+    let finishFast!: (
+      value: Awaited<ReturnType<NonNullable<StreamerApi["discoverFast"]>>>,
+    ) => void;
+    api.discoverFast = vi.fn().mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFast = resolve;
+        }),
+    );
+    const refinedTitle = {
+      ...title,
+      id: "sai:title:refined",
+      title: "A Better Fit",
+    };
+    vi.mocked(api.discover)
+      .mockResolvedValueOnce({
+        sessionId: "refinement-session",
+        mode: "live",
+        stage: "completed",
+        reply: "Original answer. Is this what you had in mind?",
+        bestMatch: { title, reason: "Initial suggestion." },
+        available: [],
+        unavailable: [],
+        unverified: [],
+        warnings: [],
+        completedAt: "2026-09-27T12:00:00.000Z",
+      })
+      .mockResolvedValueOnce({
+        sessionId: "refinement-session",
+        mode: "live",
+        stage: "completed",
+        reply: "Refined answer. Is this a better fit?",
+        bestMatch: { title: refinedTitle, reason: "Matches your feedback." },
+        available: [],
+        unavailable: [],
+        unverified: [],
+        warnings: [],
+        completedAt: "2026-09-27T12:00:00.000Z",
+      });
+
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(
+      screen.getByLabelText(/ask streamerai/i),
+      "a romantic film",
+    );
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /is this what you had in mind/i,
+      }),
+    );
+    const chat = screen.getByRole("complementary", { name: "StreamerAI chat" });
+    await user.type(
+      within(chat).getByLabelText("Reply to StreamerAI"),
+      "Less wistful, please",
+    );
+    await user.click(within(chat).getByRole("button", { name: "Send" }));
+    expect(
+      await within(chat).findByText("Refined answer. Is this a better fit?"),
+    ).toBeInTheDocument();
+    expect(vi.mocked(api.discover).mock.calls[1]?.[0]).toMatchObject({
+      sessionId: "refinement-session",
+      message: "Less wistful, please",
+    });
+    expect(vi.mocked(api.discoverFast).mock.calls[0]?.[1]?.aborted).toBe(true);
+
+    const staleTitle = {
+      ...title,
+      id: "sai:title:stale-fast",
+      title: "Stale Fast Suggestion",
+    };
+    await act(async () => {
+      finishFast({
+        sessionId: "refinement-session",
+        mode: "live",
+        stage: "completed",
+        reply: "Late initial quick answer.",
+        bestMatch: { title: staleTitle, reason: "Stale quick suggestion." },
+        available: [],
+        unavailable: [],
+        unverified: [],
+        warnings: [],
+        completedAt: "2026-09-27T12:00:00.000Z",
+      });
+    });
+
+    const results = screen.getByRole("region", {
+      name: /a considered shortlist/i,
+    });
+    expect(
+      within(results).getByRole("heading", { name: "A Better Fit" }),
+    ).toBeInTheDocument();
+    expect(
+      within(results).queryByRole("heading", {
+        name: "Stale Fast Suggestion",
+      }),
+    ).not.toBeInTheDocument();
+    expect(within(chat).getByText("Less wistful, please")).toBeInTheDocument();
+    expect(
+      within(chat).getByText("Refined answer. Is this a better fit?"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Late initial quick answer."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("stops only deep discovery and keeps already returned quick matches", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.getHome).mockResolvedValue({
+      profileId: "default",
+      mode: "live",
+      generatedAt: "2026-09-27T12:00:00.000Z",
+      sections: [],
+    });
+    api.discoverFast = vi.fn().mockResolvedValue({
+      sessionId: "stop-parallel",
+      mode: "live",
+      stage: "completed",
+      reply: "Quick matches are ready.",
+      bestMatch: { title, reason: "Quick similarity match." },
+      available: [],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+    let finishDeep!: (
+      value: Awaited<ReturnType<StreamerApi["discover"]>>,
+    ) => void;
+    vi.mocked(api.discover).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishDeep = resolve;
+        }),
+    );
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(
+      screen.getByLabelText(/ask streamerai/i),
+      "a romantic film",
+    );
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+    expect(
+      await screen.findByText("Quick similarity match."),
+    ).toBeInTheDocument();
+    const deepSignal = vi.mocked(api.discover).mock.calls[0]?.[1];
+    const fastSignal = vi.mocked(api.discoverFast).mock.calls[0]?.[1];
+    await user.click(screen.getByRole("button", { name: "Stop search" }));
+    expect(deepSignal?.aborted).toBe(true);
+    expect(fastSignal?.aborted).toBe(false);
+    expect(screen.getByText("Quick similarity match.")).toBeInTheDocument();
+    finishDeep({
+      sessionId: "stop-parallel",
+      mode: "live",
+      stage: "completed",
+      reply: "Late deep reply.",
+      bestMatch: null,
+      available: [],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+    expect(screen.queryByText("Late deep reply.")).not.toBeInTheDocument();
   });
 
   it("starts each main search in a fresh session and keeps refinements in the floating chat", async () => {
