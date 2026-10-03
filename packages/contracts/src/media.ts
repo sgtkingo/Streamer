@@ -51,6 +51,30 @@ export const MediaFormatSchema = z
   })
   .strict();
 export type MediaFormat = z.infer<typeof MediaFormatSchema>;
+
+/** A selectable provider file, never a direct playback URL. */
+export const TitleSourceSchema = z
+  .object({
+    id: z.string().regex(/^[a-f0-9]{32}$/),
+    providerId: z.string().trim().min(1).max(80),
+    candidateId: z.string().trim().min(1).max(240),
+    releaseName: z.string().trim().min(1).max(500),
+    sizeBytes: z.number().int().nonnegative().nullable(),
+    format: MediaFormatSchema,
+    seasonNumber: z.number().int().nonnegative().nullable(),
+    episodeNumber: z.number().int().positive().nullable(),
+    checkedAt: z.string().datetime({ offset: true }),
+  })
+  .strict()
+  .superRefine((source, context) => {
+    if ((source.seasonNumber === null) !== (source.episodeNumber === null)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A source must identify both season and episode or neither.",
+      });
+    }
+  });
+export type TitleSource = z.infer<typeof TitleSourceSchema>;
 export type PlaybackLanguageAvailability = Pick<
   MediaFormat,
   "audioLanguages" | "subtitleLanguages"
@@ -110,6 +134,8 @@ export const CatalogTitleSchema = z
     availabilityProvider: z.string().trim().min(1).max(80).nullable(),
     availabilityCheckedAt: z.string().datetime({ offset: true }).nullable(),
     formats: z.array(MediaFormatSchema).max(24),
+    /** Ranked, distinct files for this title. Empty for legacy and preview records. */
+    sources: z.array(TitleSourceSchema).max(24).optional(),
     seriesCoverage: SeriesCoverageSchema.nullable(),
     metadataProvider: z.string().trim().min(1).max(80),
     metadataValidatedAt: z.string().datetime({ offset: true }),
@@ -130,6 +156,31 @@ export const CatalogTitleSchema = z
   })
   .strict()
   .superRefine((title, context) => {
+    const sourceIds = new Set<string>();
+    for (const [index, source] of (title.sources ?? []).entries()) {
+      if (sourceIds.has(source.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["sources", index, "id"],
+          message: "A title cannot contain the same source twice.",
+        });
+      }
+      sourceIds.add(source.id);
+      if (title.kind === "movie" && source.seasonNumber !== null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["sources", index, "seasonNumber"],
+          message: "Movie sources cannot identify an episode.",
+        });
+      }
+      if (title.kind === "series" && source.seasonNumber === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["sources", index, "seasonNumber"],
+          message: "Series sources must identify an episode.",
+        });
+      }
+    }
     if (title.kind === "movie" && title.seriesCoverage !== null) {
       context.addIssue({
         code: z.ZodIssueCode.custom,

@@ -430,8 +430,12 @@ describe("LiveContentCoordinator", () => {
       ref: { providerId: "webshare", candidateId: "file-working" },
       releaseName: "Canonical.One.2001.720p.mkv",
     };
+    const duplicate = {
+      ...second,
+      ref: { providerId: "webshare", candidateId: "file-duplicate" },
+    };
     vi.mocked(dependencies.media.search).mockImplementation(async (request) =>
-      request.title.includes("One") ? [first, second] : [],
+      request.title.includes("One") ? [first, second, duplicate] : [],
     );
     vi.mocked(dependencies.media.inspect).mockImplementation(async (ref) => ({
       ref,
@@ -453,7 +457,7 @@ describe("LiveContentCoordinator", () => {
     const createPlayback = vi
       .fn()
       .mockRejectedValueOnce(new Error("mirror unavailable"))
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         grantId: "grant-working",
         titleId: "sai:tmdb:movie:1",
         providerId: "webshare",
@@ -494,7 +498,70 @@ describe("LiveContentCoordinator", () => {
       response.bestMatch!.title,
     );
 
+    const title = response.bestMatch!.title;
+    expect(title.sources).toHaveLength(2);
+    expect(title.sources?.map((source) => source.candidateId)).toEqual([
+      "file-broken",
+      "file-working",
+    ]);
     expect(createPlayback).toHaveBeenCalledTimes(2);
     expect(grant.variantId).toBe("file-working");
+
+    const selected = await coordinator.preparePlayback(
+      "default",
+      title,
+      undefined,
+      title.sources![1]!.id,
+    );
+    expect(selected.variantId).toBe("file-working");
+    expect(createPlayback).toHaveBeenCalledTimes(3);
+    expect(createPlayback.mock.calls[2]?.[0].variant.candidateId).toBe(
+      "file-working",
+    );
+    await expect(
+      coordinator.preparePlayback("default", title, undefined, "f".repeat(32)),
+    ).rejects.toThrow("not part of this title");
+    createPlayback.mockRejectedValueOnce(new Error("selected file went away"));
+    await expect(
+      coordinator.preparePlayback(
+        "default",
+        title,
+        undefined,
+        title.sources![0]!.id,
+      ),
+    ).rejects.toThrow("selected file went away");
+    expect(createPlayback).toHaveBeenCalledTimes(4);
+    expect(createPlayback.mock.calls[3]?.[0].variant.candidateId).toBe(
+      "file-broken",
+    );
+
+    const restarted = new LiveContentCoordinator({
+      ...dependencies,
+      integrationStateStore: await connectedStateStore(),
+      inference: {
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "qwen3.5:4b",
+        minimumVersion: "0.5.0",
+        contextTokens: 4096,
+        maxOutputTokens: 512,
+        timeoutMs: 60_000,
+      },
+      localeForProfile: () => "en",
+      now: () => new Date(NOW),
+    });
+    const searchCount = vi.mocked(dependencies.media.search).mock.calls.length;
+    await restarted.preparePlayback(
+      "default",
+      title,
+      undefined,
+      title.sources![1]!.id,
+    );
+    expect(vi.mocked(dependencies.media.search).mock.calls).toHaveLength(
+      searchCount,
+    );
+    expect(createPlayback.mock.calls[4]?.[0].variant.candidateId).toBe(
+      "file-working",
+    );
   });
 });

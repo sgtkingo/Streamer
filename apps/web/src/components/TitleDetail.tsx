@@ -6,6 +6,7 @@ import type {
 } from "@streamer-ai/contracts";
 import type { StreamerApi } from "../api/client";
 import { safeErrorMessage } from "../api/client";
+import { sourceLabel } from "../source-label";
 import { useToasts } from "./ToastProvider";
 import { playCardHoverTick } from "./TitleCard";
 
@@ -21,6 +22,7 @@ interface Props {
     title: CatalogTitle,
     episode?: EpisodeSelection,
     episodeTitle?: string,
+    sourceId?: string,
   ) => Promise<void>;
   onAdded: () => void;
 }
@@ -42,6 +44,9 @@ export function TitleDetail({
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [openSourceFor, setOpenSourceFor] = useState<string | null>(null);
+  const openSourceForRef = useRef(openSourceFor);
+  openSourceForRef.current = openSourceFor;
 
   useEffect(() => {
     if (error) showToast(error, "error");
@@ -145,7 +150,9 @@ export function TitleDetail({
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        if (openSourceForRef.current !== null) setOpenSourceFor(null);
+        else onClose();
+        return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
       const buttons = [
@@ -184,7 +191,18 @@ export function TitleDetail({
   const shownSeason =
     seasons.find((season) => season.seasonNumber === selectedSeason) ??
     seasons[0];
-  const play = async (episode?: EpisodeSelection, episodeTitle?: string) => {
+  const sourcesFor = (episode?: EpisodeSelection) =>
+    (current.sources ?? []).filter((source) =>
+      episode
+        ? source.seasonNumber === episode.seasonNumber &&
+          source.episodeNumber === episode.episodeNumber
+        : source.seasonNumber === null && source.episodeNumber === null,
+    );
+  const play = async (
+    episode?: EpisodeSelection,
+    episodeTitle?: string,
+    sourceId?: string,
+  ) => {
     scrollTopRef.current = dialogRef.current?.scrollTop ?? 0;
     lastPlayedEpisodeRef.current = episode
       ? `${episode.seasonNumber}:${episode.episodeNumber}`
@@ -195,7 +213,8 @@ export function TitleDetail({
     setPlaying(key);
     setError("");
     try {
-      await onPlay(current, episode, episodeTitle);
+      if (sourceId) await onPlay(current, episode, episodeTitle, sourceId);
+      else await onPlay(current, episode, episodeTitle);
     } catch (playError) {
       setError(safeErrorMessage(playError));
     } finally {
@@ -291,6 +310,49 @@ export function TitleDetail({
                     ? "Checking"
                     : "Currently unavailable"}
               </button>
+            )}
+            {current.kind === "movie" &&
+              playbackEnabled &&
+              sourcesFor().length > 1 && (
+                <button
+                  className="button button--secondary title-detail__source-trigger"
+                  type="button"
+                  aria-label="More sources for this movie"
+                  aria-expanded={openSourceFor === "movie"}
+                  onClick={() =>
+                    setOpenSourceFor(openSourceFor === "movie" ? null : "movie")
+                  }
+                >
+                  <span aria-hidden="true">⋮</span>
+                </button>
+              )}
+            {openSourceFor === "movie" && (
+              <div
+                className="title-detail__source-menu"
+                role="group"
+                aria-label="Movie sources"
+              >
+                <strong>Choose a source</strong>
+                <small>
+                  Each file has its own audio, subtitles and quality.
+                </small>
+                {sourcesFor().map((source, index) => (
+                  <button
+                    key={source.id}
+                    type="button"
+                    title={source.releaseName}
+                    onClick={() => {
+                      setOpenSourceFor(null);
+                      void play(undefined, undefined, source.id);
+                    }}
+                  >
+                    <span>
+                      {index === 0 ? "Recommended" : `Source ${index + 1}`}
+                    </span>
+                    <small>{sourceLabel(source)}</small>
+                  </button>
+                ))}
+              </div>
             )}
             {!current.inLibrary && (
               <button
@@ -411,6 +473,73 @@ export function TitleDetail({
                                 : "▶ Play"}
                           </button>
                         )}
+                      {episode.availability === "available" &&
+                        playbackEnabled &&
+                        sourcesFor({
+                          seasonNumber: episode.seasonNumber,
+                          episodeNumber: episode.episodeNumber,
+                        }).length > 1 && (
+                          <button
+                            className="button button--secondary button--compact title-detail__source-trigger"
+                            type="button"
+                            aria-label={`More sources for episode ${episode.episodeNumber}`}
+                            aria-expanded={
+                              openSourceFor ===
+                              `${episode.seasonNumber}:${episode.episodeNumber}`
+                            }
+                            onClick={() =>
+                              setOpenSourceFor(
+                                openSourceFor ===
+                                  `${episode.seasonNumber}:${episode.episodeNumber}`
+                                  ? null
+                                  : `${episode.seasonNumber}:${episode.episodeNumber}`,
+                              )
+                            }
+                          >
+                            <span aria-hidden="true">⋮</span>
+                          </button>
+                        )}
+                      {openSourceFor ===
+                        `${episode.seasonNumber}:${episode.episodeNumber}` && (
+                        <div
+                          className="title-detail__source-menu"
+                          role="group"
+                          aria-label={`Sources for episode ${episode.episodeNumber}`}
+                        >
+                          <strong>Choose a source</strong>
+                          <small>
+                            Each file has its own audio, subtitles and quality.
+                          </small>
+                          {sourcesFor({
+                            seasonNumber: episode.seasonNumber,
+                            episodeNumber: episode.episodeNumber,
+                          }).map((source, index) => (
+                            <button
+                              key={source.id}
+                              type="button"
+                              title={source.releaseName}
+                              onClick={() => {
+                                setOpenSourceFor(null);
+                                void play(
+                                  {
+                                    seasonNumber: episode.seasonNumber,
+                                    episodeNumber: episode.episodeNumber,
+                                  },
+                                  episode.title,
+                                  source.id,
+                                );
+                              }}
+                            >
+                              <span>
+                                {index === 0
+                                  ? "Recommended"
+                                  : `Source ${index + 1}`}
+                              </span>
+                              <small>{sourceLabel(source)}</small>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ol>

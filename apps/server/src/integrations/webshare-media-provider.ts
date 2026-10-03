@@ -58,8 +58,14 @@ function provenance(retrievedAt: string) {
 
 function mediaFormat(name: string, type: string | null): MediaFormat {
   const normalized = name.toLowerCase();
+  const resolutionHint =
+    /(?:^|[. _-])(2160p|4k|uhd|1080p|720p|480p)(?:[. _-]|$)/i
+      .exec(name)?.[1]
+      ?.toLowerCase() ?? null;
   const resolution =
-    /(?:^|[. _-])(2160p|1080p|720p|480p)(?:[. _-]|$)/i.exec(name)?.[1] ?? null;
+    resolutionHint === "4k" || resolutionHint === "uhd"
+      ? "2160p"
+      : resolutionHint;
   const codec = /(?:x265|h[. ]?265|hevc)/i.test(name)
     ? "H.265"
     : /(?:x264|h[. ]?264|avc)/i.test(name)

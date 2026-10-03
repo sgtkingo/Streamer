@@ -109,11 +109,13 @@ export interface StreamerApi {
     profileId: string,
     titleId: string,
     episode?: EpisodeSelection,
+    sourceId?: string,
   ): Promise<PlaybackPrepareResult>;
   checkPlayback(
     profileId: string,
     titleId: string,
     episode?: EpisodeSelection,
+    sourceId?: string,
   ): Promise<PlaybackCheckResult>;
   getPlaybackManifest(grantId: string): Promise<PlaybackMediaInfo>;
   closePlayback(grantId: string): Promise<void>;
@@ -486,15 +488,21 @@ export const apiClient: StreamerApi = {
       `/profiles/${encodeURIComponent(profileId)}/playback/start`,
       { method: "POST", body: JSON.stringify({ titleId }) },
     ),
-  preparePlayback: (profileId, titleId, episode) =>
+  preparePlayback: (profileId, titleId, episode, sourceId) =>
     request<PlaybackPrepareResult>(
       `/profiles/${encodeURIComponent(profileId)}/playback/prepare`,
-      { method: "POST", body: JSON.stringify({ titleId, ...episode }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ titleId, ...episode, sourceId }),
+      },
     ),
-  checkPlayback: (profileId, titleId, episode) =>
+  checkPlayback: (profileId, titleId, episode, sourceId) =>
     request<PlaybackCheckResult>(
       `/profiles/${encodeURIComponent(profileId)}/playback/check`,
-      { method: "POST", body: JSON.stringify({ titleId, ...episode }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ titleId, ...episode, sourceId }),
+      },
     ),
   getPlaybackManifest: (grantId) =>
     request<PlaybackMediaInfo>(

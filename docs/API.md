@@ -86,8 +86,8 @@ is registered is remembered briefly, so that request cannot start afterward.
 | `GET` | `/profiles/:profileId/history` | List newest playback events. |
 | `DELETE` | `/profiles/:profileId/history/:eventId` | Remove one history event. |
 | `POST` | `/profiles/:profileId/history/clear` | Clear history after an explicit confirmation token. |
-| `POST` | `/profiles/:profileId/playback/check` | Verify a tile or selected episode asynchronously without issuing a grant or recording History; return detected audio and playable subtitle languages when media probing succeeds. |
-| `POST` | `/profiles/:profileId/playback/prepare` | Recheck the source and issue a short lived grant without changing Library or History. For a series episode, send `{ "titleId": "...", "seasonNumber": 1, "episodeNumber": 2 }`; both episode fields are required together. |
+| `POST` | `/profiles/:profileId/playback/check` | Verify a tile or selected episode asynchronously without issuing a grant or recording History; return detected audio and playable subtitle languages when media probing succeeds. Optional `sourceId` checks exactly one known file. |
+| `POST` | `/profiles/:profileId/playback/prepare` | Recheck the source and issue a short lived grant without changing Library or History. For a series episode, send `{ "titleId": "...", "seasonNumber": 1, "episodeNumber": 2 }`; both episode fields are required together. Optional `sourceId` selects exactly one file belonging to that title and episode. |
 | `POST` | `/profiles/:profileId/playback/start` | Legacy one-call prepare and start for clients that do not use the two-stage flow. |
 | `GET` | `/playback/grants/:grantId/manifest` | Probe the selected media and list duration, audio tracks and extractable text subtitles. |
 | `GET` | `/playback/grants/:grantId/media?audio=2&start=31.500` | Stream browser-compatible fragmented MP4 with selected audio and a start offset. First request records playback once. |
@@ -118,6 +118,13 @@ position. The server refreshes the private provider link for later media
 requests, so an expired direct link does not break a seek. Local subtitle files
 are converted to WebVTT in browser memory.
 Only text-based embedded subtitles can be extracted; bitmap tracks are omitted.
+
+Live title objects may include `sources`: inspected provider files with stable
+32-character IDs, provider candidate references, quality/language hints and
+episode coordinates. Direct playback URLs are never included. Without
+`sourceId`, playback can fall back through the ranked candidates; an explicit
+`sourceId` never falls back. The current player handles one selected file per
+grant and does not merge tracks from multiple files.
 
 A successful `check` returns `{ "ok": true, "audioLanguages": ["ces", "eng"],
 "subtitleLanguages": ["cs"] }` when track inspection succeeds. The language

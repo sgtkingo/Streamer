@@ -190,16 +190,23 @@ export function LibraryPage({
     }
   };
 
-  const play = async (item: CatalogTitle, episode?: EpisodeSelection) => {
+  const play = async (
+    item: CatalogTitle,
+    episode?: EpisodeSelection,
+    sourceId?: string,
+  ) => {
     if (pendingLibraryAction) return;
     setPendingLibraryAction({ titleId: item.id, kind: "play" });
     setLibraryError("");
     setLibraryNotice("");
     try {
-      const response = await api.preparePlayback(profileId, item.id, episode);
+      const response = sourceId
+        ? await api.preparePlayback(profileId, item.id, episode, sourceId)
+        : await api.preparePlayback(profileId, item.id, episode);
       onPlaybackReady(item, response.playback, episode);
     } catch (error) {
-      playbackChecks.markFailed(item, safeErrorMessage(error), episode);
+      if (sourceId) setLibraryError(safeErrorMessage(error));
+      else playbackChecks.markFailed(item, safeErrorMessage(error), episode);
     } finally {
       setPendingLibraryAction(null);
     }

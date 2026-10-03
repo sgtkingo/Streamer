@@ -454,6 +454,7 @@ export function registerContentRoutes(
           additionalProperties: false,
           properties: {
             titleId: { type: "string", minLength: 1, maxLength: 160 },
+            sourceId: { type: "string", pattern: "^[a-f0-9]{32}$" },
             seasonNumber: { type: "integer", minimum: 0 },
             episodeNumber: { type: "integer", minimum: 1 },
           },
@@ -462,8 +463,9 @@ export function registerContentRoutes(
     },
     async (request, reply) => {
       const { profileId } = request.params as { profileId: string };
-      const { titleId, ...selection } = request.body as {
+      const { titleId, sourceId, ...selection } = request.body as {
         titleId: string;
+        sourceId?: string;
         seasonNumber?: number;
         episodeNumber?: number;
       };
@@ -483,6 +485,7 @@ export function registerContentRoutes(
           profileId,
           titleId,
           episode,
+          sourceId,
         );
         return { ok: true, ...(languages ?? {}) };
       } catch (error) {
@@ -502,6 +505,7 @@ export function registerContentRoutes(
           additionalProperties: false,
           properties: {
             titleId: { type: "string", minLength: 1, maxLength: 160 },
+            sourceId: { type: "string", pattern: "^[a-f0-9]{32}$" },
             seasonNumber: { type: "integer", minimum: 0 },
             episodeNumber: { type: "integer", minimum: 1 },
           },
@@ -510,8 +514,9 @@ export function registerContentRoutes(
     },
     async (request, reply) => {
       const { profileId } = request.params as { profileId: string };
-      const { titleId, ...selection } = request.body as {
+      const { titleId, sourceId, ...selection } = request.body as {
         titleId: string;
+        sourceId?: string;
         seasonNumber?: number;
         episodeNumber?: number;
       };
@@ -533,6 +538,7 @@ export function registerContentRoutes(
             profileId,
             titleId,
             episode,
+            sourceId,
           ),
         };
       } catch (error) {

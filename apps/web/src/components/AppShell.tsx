@@ -67,8 +67,11 @@ export function AppShell({
       title: CatalogTitle,
       episode?: EpisodeSelection,
       episodeTitle?: string,
+      sourceId?: string,
     ) => {
-      const response = await api.preparePlayback(profileId, title.id, episode);
+      const response = sourceId
+        ? await api.preparePlayback(profileId, title.id, episode, sourceId)
+        : await api.preparePlayback(profileId, title.id, episode);
       setActivePlayback({
         title,
         grant: response.playback,

@@ -1,10 +1,11 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CatalogTitle, PlaybackPreferences } from "@streamer-ai/contracts";
 import type { EpisodeSelection } from "@streamer-ai/contracts";
 import {
   titleLanguageBadges,
   titleLanguageLabel,
 } from "../title-language-label";
+import { sourceLabel } from "../source-label";
 import type { PlaybackCheckState } from "./usePlaybackChecks";
 
 let cardHoverAudioContext: AudioContext | null = null;
@@ -29,10 +30,7 @@ export function playCardHoverTick() {
       const gain = context.createGain();
       oscillator.type = "sine";
       oscillator.frequency.setValueAtTime(1350, startAt);
-      oscillator.frequency.exponentialRampToValueAtTime(
-        760,
-        startAt + 0.035,
-      );
+      oscillator.frequency.exponentialRampToValueAtTime(760, startAt + 0.035);
       gain.gain.setValueAtTime(0.025, startAt);
       gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.045);
       oscillator.connect(gain);
@@ -41,7 +39,10 @@ export function playCardHoverTick() {
       oscillator.stop(startAt + 0.05);
     };
     if (context.state === "suspended") {
-      void context.resume().then(play).catch(() => undefined);
+      void context
+        .resume()
+        .then(play)
+        .catch(() => undefined);
     } else {
       play();
     }
@@ -55,7 +56,11 @@ interface TitleCardProps {
   preferences: PlaybackPreferences;
   reason?: string;
   hero?: boolean;
-  onPlay: (item: CatalogTitle, episode?: EpisodeSelection) => void;
+  onPlay: (
+    item: CatalogTitle,
+    episode?: EpisodeSelection,
+    sourceId?: string,
+  ) => void;
   onOpen?: (item: CatalogTitle) => void;
   onCheck?: (item: CatalogTitle, episode?: EpisodeSelection) => void;
   onAdd: (item: CatalogTitle) => void;
@@ -113,6 +118,24 @@ export function TitleCard({
   pendingAction,
   playbackCheck,
 }: TitleCardProps) {
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const sourcePickerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!sourcesOpen) return;
+    const dismissOutside = (event: PointerEvent) => {
+      if (!sourcePickerRef.current?.contains(event.target as Node))
+        setSourcesOpen(false);
+    };
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSourcesOpen(false);
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, [sourcesOpen]);
   const playable = titleHasPlayableVariant(item);
   const checkStatus = playbackCheck?.status ?? "checking";
   const checkedLanguages =
@@ -162,6 +185,12 @@ export function TitleCard({
         ? (item.resumeEpisode ?? { seasonNumber: 1, episodeNumber: 1 })
         : undefined,
     [item.kind, item.resumeEpisode],
+  );
+  const alternateSources = (item.sources ?? []).filter((source) =>
+    defaultEpisode
+      ? source.seasonNumber === defaultEpisode.seasonNumber &&
+        source.episodeNumber === defaultEpisode.episodeNumber
+      : source.seasonNumber === null && source.episodeNumber === null,
   );
   const canShowPlayback = playbackEnabled || playable;
   const displayAvailability = playbackEnabled
@@ -291,7 +320,11 @@ export function TitleCard({
           </span>
           <span
             className={`title-card__rating ${ratingBadgeClass}`}
-            aria-label={score !== null && score < 60 ? `${ratingLabel(item)}, low rating` : undefined}
+            aria-label={
+              score !== null && score < 60
+                ? `${ratingLabel(item)}, low rating`
+                : undefined
+            }
           >
             {ratingLabel(item)}
             {score !== null && score < 60 && (
@@ -302,6 +335,9 @@ export function TitleCard({
           </span>
           {item.matchPercent !== null && (
             <span>Match {item.matchPercent}%</span>
+          )}
+          {alternateSources.length > 1 && (
+            <span>{alternateSources.length} sources</span>
           )}
         </div>
         <h3>
@@ -431,6 +467,46 @@ export function TitleCard({
                       : playAction}
               </button>
             )
+          )}
+          {playbackEnabled && alternateSources.length > 1 && (
+            <div ref={sourcePickerRef} className="title-card__source-picker">
+              <button
+                className="button button--secondary button--compact title-card__source-trigger"
+                type="button"
+                aria-label={`More sources for ${item.title}`}
+                aria-expanded={sourcesOpen}
+                onClick={() => setSourcesOpen((open) => !open)}
+                disabled={pendingAction !== undefined}
+              >
+                <span aria-hidden="true">⋮</span>
+              </button>
+              {sourcesOpen && (
+                <div
+                  className="title-card__source-menu"
+                  role="group"
+                  aria-label={`Sources for ${item.title}`}
+                >
+                  <strong>Choose a source</strong>
+                  <small>Audio and subtitles are tied to each file.</small>
+                  {alternateSources.map((source, index) => (
+                    <button
+                      key={source.id}
+                      type="button"
+                      title={source.releaseName}
+                      onClick={() => {
+                        setSourcesOpen(false);
+                        onPlay(item, defaultEpisode, source.id);
+                      }}
+                    >
+                      <span>
+                        {index === 0 ? "Recommended" : `Source ${index + 1}`}
+                      </span>
+                      <small>{sourceLabel(source)}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           {playable && !playbackEnabled && item.kind !== "series" && (
             <button

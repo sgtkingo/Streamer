@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   PlaybackPreferences,
   UpdateViewerProfile,
@@ -51,9 +51,15 @@ export function ProfilePages({
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-  const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToasts();
+
+  const dismissDeleteConfirmation = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setDeleteConfirmationOpen(false);
+  }, []);
 
   useEffect(() => {
     if (notice) showToast(notice, "success");
@@ -77,8 +83,7 @@ export function ProfilePages({
       if (event.key === "Escape") {
         if (deleting) return;
         event.preventDefault();
-        setDeleteConfirmationOpen(false);
-        deleteButtonRef.current?.focus();
+        dismissDeleteConfirmation();
         return;
       }
       if (event.key !== "Tab" || !dialog) return;
@@ -101,7 +106,7 @@ export function ProfilePages({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [deleteConfirmationOpen, deleting]);
+  }, [deleteConfirmationOpen, deleting, dismissDeleteConfirmation]);
 
   const save = async (patch: UpdateViewerProfile) => {
     setSaving(true);
@@ -221,7 +226,6 @@ export function ProfilePages({
             </button>
             <button
               className="button button--logout"
-              ref={deleteButtonRef}
               type="button"
               disabled={deleting || saving}
               onClick={() => setDeleteConfirmationOpen(true)}
@@ -354,8 +358,7 @@ export function ProfilePages({
           className="profile-delete-backdrop"
           onMouseDown={(event) => {
             if (!deleting && event.target === event.currentTarget) {
-              setDeleteConfirmationOpen(false);
-              deleteButtonRef.current?.focus();
+              dismissDeleteConfirmation();
             }
           }}
         >
@@ -379,10 +382,7 @@ export function ProfilePages({
                 className="button button--secondary profile-delete-dialog__cancel"
                 type="button"
                 disabled={deleting}
-                onClick={() => {
-                  setDeleteConfirmationOpen(false);
-                  deleteButtonRef.current?.focus();
-                }}
+                onClick={dismissDeleteConfirmation}
               >
                 Cancel
               </button>

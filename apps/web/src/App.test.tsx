@@ -1091,7 +1091,7 @@ describe("conversational Home", () => {
 
     expect(signal?.aborted).toBe(true);
     expect(
-      await screen.findByText(/could not confirm that the search stopped/i),
+      await screen.findByText(/search stop could not be confirmed/i),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Find something" }),

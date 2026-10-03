@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CatalogTitleSchema,
   DiscoveryResponseSchema,
   HomeFeedSchema,
+  type CatalogTitle,
   type DiscoveryResponse,
+  type EpisodeSelection,
 } from "@streamer-ai/contracts";
 import {
   createApp,
@@ -363,6 +365,26 @@ describe("provider-neutral content API", () => {
           subtitleLanguages: ["cs"],
         },
       ],
+      sources: [
+        {
+          id: "a".repeat(32),
+          providerId: "test-media",
+          candidateId: "candidate-1",
+          releaseName: "Dynamic.title.1080p.mkv",
+          sizeBytes: 100,
+          format: {
+            label: "1080p",
+            container: "mkv",
+            resolution: "1080p",
+            videoCodec: "H.264",
+            audioLanguages: ["en"],
+            subtitleLanguages: ["cs"],
+          },
+          seasonNumber: null,
+          episodeNumber: null,
+          checkedAt: "2026-09-27T12:00:00.000Z",
+        },
+      ],
       seriesCoverage: null,
       metadataProvider: "test-db",
       metadataValidatedAt: "2026-09-27T12:00:00.000Z",
@@ -371,6 +393,34 @@ describe("provider-neutral content API", () => {
       inLibrary: false,
       progressPercent: null,
     });
+    const preparePlayback = vi.fn(
+      async (
+        _profileId: string,
+        title: CatalogTitle,
+        _episode?: EpisodeSelection,
+        _sourceId?: string,
+      ) => ({
+        grantId: "grant-dynamic",
+        titleId: title.id,
+        providerId: "test-media",
+        variantId: "variant-1",
+        url: "/api/v1/playback/grants/grant-dynamic",
+        supportsHttpRange: true,
+        expiresAt: "2026-09-27T12:05:00.000Z",
+        embeddedSubtitles: [],
+      }),
+    );
+    const checkPlayback = vi.fn(
+      async (
+        _profileId: string,
+        _title: CatalogTitle,
+        _episode?: EpisodeSelection,
+        _sourceId?: string,
+      ) => ({
+        audioLanguages: ["en"],
+        subtitleLanguages: ["cs"],
+      }),
+    );
     const contentProvider: StreamerContentProvider = {
       id: "test-coordinator",
       mode: "live",
@@ -395,16 +445,8 @@ describe("provider-neutral content API", () => {
           warnings: [],
           completedAt,
         }),
-      preparePlayback: async (_profileId, title) => ({
-        grantId: "grant-dynamic",
-        titleId: title.id,
-        providerId: "test-media",
-        variantId: "variant-1",
-        url: "/api/v1/playback/grants/grant-dynamic",
-        supportsHttpRange: true,
-        expiresAt: "2026-09-27T12:05:00.000Z",
-        embeddedSubtitles: [],
-      }),
+      preparePlayback,
+      checkPlayback,
     };
     const instance = createApp({
       environment: "test",
@@ -433,6 +475,21 @@ describe("provider-neutral content API", () => {
       url: "/api/v1/profiles/default/playback/prepare",
       payload: { titleId: "sai:test:dynamic-title" },
     });
+    const selected = await instance.inject({
+      method: "POST",
+      url: "/api/v1/profiles/default/playback/prepare",
+      payload: { titleId: discoveredTitle.id, sourceId: "a".repeat(32) },
+    });
+    const checked = await instance.inject({
+      method: "POST",
+      url: "/api/v1/profiles/default/playback/check",
+      payload: { titleId: discoveredTitle.id, sourceId: "a".repeat(32) },
+    });
+    const malformed = await instance.inject({
+      method: "POST",
+      url: "/api/v1/profiles/default/playback/prepare",
+      payload: { titleId: discoveredTitle.id, sourceId: "not-a-source-id" },
+    });
     const historyBeforePlay = await instance.inject({
       method: "GET",
       url: "/api/v1/profiles/default/history",
@@ -446,8 +503,16 @@ describe("provider-neutral content API", () => {
     expect(discovery.statusCode).toBe(200);
     expect(saved.statusCode).toBe(200);
     expect(saved.json().items[0].title.id).toBe("sai:test:dynamic-title");
+    expect(saved.json().items[0].title.sources).toMatchObject([
+      { id: "a".repeat(32), candidateId: "candidate-1" },
+    ]);
     expect(prepared.statusCode).toBe(200);
     expect(prepared.json().playback.titleId).toBe("sai:test:dynamic-title");
+    expect(selected.statusCode).toBe(200);
+    expect(checked.statusCode).toBe(200);
+    expect(malformed.statusCode).toBe(400);
+    expect(preparePlayback.mock.calls[1]?.[3]).toBe("a".repeat(32));
+    expect(checkPlayback.mock.calls[0]?.[3]).toBe("a".repeat(32));
     expect(historyBeforePlay.json().items).toHaveLength(0);
     expect(started.statusCode).toBe(200);
     expect(started.json()).toMatchObject({

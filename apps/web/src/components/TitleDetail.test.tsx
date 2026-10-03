@@ -167,4 +167,63 @@ describe("TitleDetail", () => {
     expect(within(genres).getByText("Comedy")).toBeInTheDocument();
     expect(api.getTitleDetail).toHaveBeenCalledWith("default", movie.id);
   });
+
+  it("plays only the movie source selected in the three-dot menu", async () => {
+    const user = userEvent.setup();
+    const sources = ["source-a", "source-b"].map((candidateId, index) => ({
+      id: String(index + 1).repeat(32),
+      providerId: "webshare",
+      candidateId,
+      releaseName: `Sample.Movie.${index ? "720p" : "1080p"}.mkv`,
+      sizeBytes: 100 + index,
+      format: { ...title.formats[0]!, resolution: index ? "720p" : "1080p" },
+      seasonNumber: null,
+      episodeNumber: null,
+      checkedAt: "2026-09-29T20:00:00.000Z",
+    }));
+    const movie: CatalogTitle = {
+      ...title,
+      kind: "movie",
+      title: "Sample Movie",
+      availability: "available",
+      seriesCoverage: null,
+      sources,
+    };
+    const api = {
+      getTitleDetail: vi
+        .fn()
+        .mockResolvedValue({ title: movie, related: [], series: null }),
+      checkPlayback: vi.fn().mockResolvedValue({ ok: true }),
+    } as unknown as StreamerApi;
+    const onPlay = vi.fn().mockResolvedValue(undefined);
+    render(
+      <TitleDetail
+        api={api}
+        profileId="default"
+        title={movie}
+        playbackEnabled
+        onClose={vi.fn()}
+        onOpenRelated={vi.fn()}
+        onPlay={onPlay}
+        onAdded={vi.fn()}
+      />,
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Details for Sample Movie",
+    });
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "More sources for this movie",
+      }),
+    );
+    const menu = within(dialog).getByRole("group", { name: "Movie sources" });
+    expect(within(menu).getAllByRole("button")).toHaveLength(2);
+    await user.click(within(menu).getByRole("button", { name: /Source 2/ }));
+    expect(onPlay).toHaveBeenCalledWith(
+      movie,
+      undefined,
+      undefined,
+      sources[1]!.id,
+    );
+  });
 });

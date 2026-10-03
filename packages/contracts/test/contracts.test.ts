@@ -132,6 +132,72 @@ describe("public contracts", () => {
     ).toThrow(/verified format/);
   });
 
+  it("keeps selectable files title-scoped and rejects duplicate or mismatched sources", () => {
+    const format = {
+      label: "1080p",
+      container: "mkv",
+      resolution: "1080p",
+      videoCodec: "H.264",
+      audioLanguages: ["en"],
+      subtitleLanguages: [],
+    };
+    const source = {
+      id: "a".repeat(32),
+      providerId: "webshare",
+      candidateId: "file-1",
+      releaseName: "Example.1080p.mkv",
+      sizeBytes: 100,
+      format,
+      seasonNumber: null,
+      episodeNumber: null,
+      checkedAt: "2026-09-27T10:00:00.000Z",
+    };
+    const title = {
+      id: "title-1",
+      kind: "movie",
+      title: "Example",
+      originalTitle: null,
+      year: 2026,
+      synopsis: "Example synopsis",
+      posterUrl: null,
+      backdropUrl: null,
+      accentColor: "#112233",
+      genres: [],
+      ratings: [],
+      matchPercent: null,
+      availability: "available",
+      availabilityProvider: "webshare",
+      availabilityCheckedAt: "2026-09-27T10:00:00.000Z",
+      formats: [format],
+      sources: [source],
+      seriesCoverage: null,
+      metadataProvider: "tmdb",
+      metadataValidatedAt: "2026-09-27T10:00:00.000Z",
+      inLibrary: false,
+      progressPercent: null,
+    };
+    expect(CatalogTitleSchema.parse(title).sources).toEqual([source]);
+    expect(
+      CatalogTitleSchema.safeParse({ ...title, sources: undefined }).success,
+    ).toBe(true);
+    expect(
+      CatalogTitleSchema.safeParse({ ...title, sources: [source, source] })
+        .success,
+    ).toBe(false);
+    expect(
+      CatalogTitleSchema.safeParse({
+        ...title,
+        sources: [{ ...source, seasonNumber: 1, episodeNumber: 1 }],
+      }).success,
+    ).toBe(false);
+    expect(
+      CatalogTitleSchema.safeParse({
+        ...title,
+        sources: [{ ...source, url: "https://example.invalid/video" }],
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects duplicate discovery titles and an unavailable best match", () => {
     const unavailable = {
       id: "title-1",

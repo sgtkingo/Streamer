@@ -41,11 +41,13 @@ export interface StreamerContentProvider {
     profileId: string,
     title: CatalogTitle,
     episode?: EpisodeSelection,
+    sourceId?: string,
   ): Promise<PlaybackLanguageAvailability | void>;
   preparePlayback?(
     profileId: string,
     title: CatalogTitle,
     episode?: EpisodeSelection,
+    sourceId?: string,
   ): Promise<PlaybackGrant>;
   getSeriesDetail?(
     profileId: string,

@@ -83,6 +83,7 @@ export function VideoPlayer({
 }: VideoPlayerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const playToggleRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const localUrlsRef = useRef(new Set<string>());
   const resumeAfterLoadRef = useRef(true);
@@ -117,7 +118,7 @@ export function VideoPlayer({
   const [playing, setPlaying] = useState(false);
   const [hasEnded, setHasEnded] = useState(false);
   const [showPauseBurst, setShowPauseBurst] = useState(false);
-  const [needsClick, setNeedsClick] = useState(false);
+  const [, setNeedsClick] = useState(false);
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
   const [resumePrompt, setResumePrompt] = useState(false);
@@ -424,7 +425,13 @@ export function VideoPlayer({
       if (event.code === "Space") {
         event.preventDefault();
         event.stopPropagation();
-        if (!event.repeat) togglePlayback();
+        if (!event.repeat) {
+          togglePlayback();
+          const playToggle = playToggleRef.current;
+          if (playToggle && document.activeElement === playToggle) {
+            playToggle.blur();
+          }
+        }
         return;
       }
       if (event.key === "Escape") {
@@ -922,6 +929,7 @@ export function VideoPlayer({
               <button
                 type="button"
                 className="video-player__icon-button video-player__play-toggle"
+                ref={playToggleRef}
                 onClick={togglePlayback}
                 aria-label={playing ? "Pause" : "Play"}
               >

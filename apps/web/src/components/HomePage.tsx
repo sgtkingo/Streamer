@@ -398,15 +398,23 @@ export function HomePage({
     }
   };
 
-  const play = async (item: CatalogTitle, episode?: EpisodeSelection) => {
+  const play = async (
+    item: CatalogTitle,
+    episode?: EpisodeSelection,
+    sourceId?: string,
+  ) => {
     if (pendingAction) return;
     setPendingAction({ titleId: item.id, kind: "play" });
     setError("");
     try {
-      const response = await api.preparePlayback(profileId, item.id, episode);
+      const response = sourceId
+        ? await api.preparePlayback(profileId, item.id, episode, sourceId)
+        : await api.preparePlayback(profileId, item.id, episode);
       onPlaybackReady(item, response.playback, episode);
     } catch (actionError) {
-      playbackChecks.markFailed(item, safeErrorMessage(actionError), episode);
+      if (sourceId) setError(safeErrorMessage(actionError));
+      else
+        playbackChecks.markFailed(item, safeErrorMessage(actionError), episode);
     } finally {
       setPendingAction(null);
     }
@@ -479,7 +487,6 @@ export function HomePage({
             }
           >
             <span className="composer-submit__label" aria-hidden={isSearching}>
-              Find something{" "}
               <span className="composer-submit__enter" aria-hidden="true">
                 ↵
               </span>

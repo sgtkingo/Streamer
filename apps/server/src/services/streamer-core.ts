@@ -581,6 +581,7 @@ export class StreamerCore {
     profileId: string,
     titleId: string,
     episode?: EpisodeSelection,
+    sourceId?: string,
   ): Promise<PlaybackLanguageAvailability | void> {
     this.requireProfile(profileId);
     const item = this.database.titles.get(titleId);
@@ -606,6 +607,7 @@ export class StreamerCore {
         profileId,
         title,
         episode,
+        sourceId,
       );
     } catch {
       throw new PlaybackRecheckError(titleId);
@@ -616,6 +618,7 @@ export class StreamerCore {
     profileId: string,
     titleId: string,
     episode?: EpisodeSelection,
+    sourceId?: string,
   ): Promise<PlaybackGrant> {
     this.requireProfile(profileId);
     const item = this.database.titles.get(titleId);
@@ -639,7 +642,12 @@ export class StreamerCore {
     let playback: PlaybackGrant;
     try {
       playback = PlaybackGrantSchema.parse(
-        await this.contentProvider.preparePlayback(profileId, title, episode),
+        await this.contentProvider.preparePlayback(
+          profileId,
+          title,
+          episode,
+          sourceId,
+        ),
       );
     } catch {
       throw new PlaybackRecheckError(titleId);
