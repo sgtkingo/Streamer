@@ -69,6 +69,10 @@ export interface StreamerApi {
     password: string,
   ): Promise<ConnectionResult>;
   detectLocalAi(): Promise<LocalAiResult>;
+  getInferenceResidency(
+    signal?: AbortSignal,
+    record?: boolean,
+  ): Promise<{ state: "loaded" | "unloaded" | "unknown"; checkedAt: string }>;
   completeSetup(request: CompleteSetupRequest): Promise<void>;
   getProfiles(): Promise<{ items: ViewerProfile[]; limit: number }>;
   createProfile(request: {
@@ -86,7 +90,10 @@ export interface StreamerApi {
     titleId: string,
     retry?: boolean,
   ): Promise<TitleDetail>;
-  discover(request: DiscoveryRequest): Promise<DiscoveryResponse>;
+  discover(
+    request: DiscoveryRequest,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryResponse>;
   getLibrary(profileId: string): Promise<LibraryResponse>;
   addToLibrary(profileId: string, titleId: string): Promise<LibraryResponse>;
   removeFromLibrary(profileId: string, titleId: string): Promise<void>;
@@ -178,7 +185,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ...init?.headers,
       },
     });
-  } catch {
+  } catch (error) {
+    if (init?.signal?.aborted) throw error;
     throw new ApiError(
       "The home server is unreachable. Check that StreamerAI is running.",
     );
@@ -396,6 +404,11 @@ export const apiClient: StreamerApi = {
     request<LocalAiResult>("/inference/detect", {
       method: "POST",
     }),
+  getInferenceResidency: (signal, record = false) =>
+    request<{ state: "loaded" | "unloaded" | "unknown"; checkedAt: string }>(
+      `/inference/residency${record ? "?record=true" : ""}`,
+      { signal },
+    ),
   completeSetup: (payload) =>
     request<void>("/setup/complete", {
       method: "POST",
@@ -423,10 +436,11 @@ export const apiClient: StreamerApi = {
     request<TitleDetail>(
       `/profiles/${encodeURIComponent(profileId)}/titles/${encodeURIComponent(titleId)}${retry ? "?retry=true" : ""}`,
     ),
-  discover: (payload) =>
+  discover: (payload, signal) =>
     request<DiscoveryResponse>("/discovery/sessions", {
       method: "POST",
       body: JSON.stringify(payload),
+      signal,
     }),
   getLibrary: (profileId) =>
     request<LibraryResponse>(

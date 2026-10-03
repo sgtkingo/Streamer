@@ -7,6 +7,49 @@ import {
 } from "../title-language-label";
 import type { PlaybackCheckState } from "./usePlaybackChecks";
 
+let cardHoverAudioContext: AudioContext | null = null;
+let lastCardHoverTickAt = 0;
+
+function playCardHoverTick() {
+  if (
+    typeof window === "undefined" ||
+    typeof window.AudioContext !== "function"
+  )
+    return;
+  const now = performance.now();
+  if (now - lastCardHoverTickAt < 100) return;
+  lastCardHoverTickAt = now;
+
+  try {
+    cardHoverAudioContext ??= new window.AudioContext();
+    const context = cardHoverAudioContext;
+    const play = () => {
+      const startAt = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(1350, startAt);
+      oscillator.frequency.exponentialRampToValueAtTime(
+        760,
+        startAt + 0.035,
+      );
+      gain.gain.setValueAtTime(0.025, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.045);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(startAt);
+      oscillator.stop(startAt + 0.05);
+    };
+    if (context.state === "suspended") {
+      void context.resume().then(play).catch(() => undefined);
+    } else {
+      play();
+    }
+  } catch {
+    // Hover sound is decorative and may be unavailable in restricted browsers.
+  }
+}
+
 interface TitleCardProps {
   item: CatalogTitle;
   preferences: PlaybackPreferences;
@@ -98,6 +141,16 @@ export function TitleCard({
     item.progressPercent !== null &&
     item.progressPercent >= 2 &&
     item.progressPercent < 95;
+  const playAction = (
+    <>
+      <span className="title-card__play-icon" aria-hidden="true">
+        ▶
+      </span>
+      <span className="title-card__play-label">
+        {hasSavedProgress ? "Continue" : "Play"}
+      </span>
+    </>
+  );
   const defaultEpisode = useMemo(
     () =>
       item.kind === "series"
@@ -175,6 +228,9 @@ export function TitleCard({
       className={classNames}
       style={{ "--card-accent": item.accentColor } as React.CSSProperties}
       aria-busy={pendingAction ? "true" : undefined}
+      onPointerEnter={(event) => {
+        if (event.pointerType === "mouse") playCardHoverTick();
+      }}
       onClick={(event) => {
         if (
           !onOpen ||
@@ -288,7 +344,7 @@ export function TitleCard({
           )}
           {item.kind === "series" && onOpen ? (
             <button
-              className={`button button--${checkStatus === "failed" ? "secondary" : "primary"} button--compact${checkStatus === "checking" || pendingAction === "play" ? " button--checking" : ""}`}
+              className={`button button--${checkStatus === "failed" ? "secondary" : "primary"} button--compact${checkStatus === "ready" ? " button--play-action" : ""}${checkStatus === "checking" || pendingAction === "play" ? " button--checking" : ""}`}
               type="button"
               disabled={
                 pendingAction !== undefined || checkStatus === "checking"
@@ -304,16 +360,14 @@ export function TitleCard({
                 : pendingAction === "play"
                   ? "Starting…"
                   : checkStatus === "ready"
-                    ? hasSavedProgress
-                      ? "Continue"
-                      : "▶ Play"
+                    ? playAction
                     : "Episodes"}
             </button>
           ) : (
             canShowPlayback &&
             playbackEnabled && (
               <button
-                className={`button button--${checkStatus === "failed" ? "warning" : "primary"} button--compact${
+                className={`button button--${checkStatus === "failed" ? "warning" : "primary"} button--compact${checkStatus === "ready" ? " button--play-action" : ""}${
                   checkStatus === "checking" || pendingAction === "play"
                     ? " button--checking"
                     : ""
@@ -332,9 +386,7 @@ export function TitleCard({
                     ? "Starting…"
                     : checkStatus === "failed"
                       ? "Retry check"
-                      : hasSavedProgress
-                        ? "Continue"
-                        : "▶ Play"}
+                      : playAction}
               </button>
             )
           )}

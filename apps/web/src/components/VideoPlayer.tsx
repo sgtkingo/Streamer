@@ -92,8 +92,10 @@ export function VideoPlayer({
   const durationSecondsRef = useRef(0);
   const lastProgressAtRef = useRef(0);
   const startedRef = useRef(false);
+  const pauseResumePendingRef = useRef(false);
   const closingRef = useRef(false);
   const cleanupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pauseBurstTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [info, setInfo] = useState<PlaybackMediaInfo | null>(null);
   const [loadingError, setLoadingError] = useState("");
   const [subtitleError, setSubtitleError] = useState("");
@@ -114,6 +116,7 @@ export function VideoPlayer({
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [hasEnded, setHasEnded] = useState(false);
+  const [showPauseBurst, setShowPauseBurst] = useState(false);
   const [needsClick, setNeedsClick] = useState(false);
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
@@ -328,6 +331,14 @@ export function VideoPlayer({
     };
   }, []);
 
+  useEffect(
+    () => () => {
+      if (pauseBurstTimerRef.current !== null)
+        clearTimeout(pauseBurstTimerRef.current);
+    },
+    [],
+  );
+
   useEffect(() => {
     const element = rootRef.current;
     if (!element) return;
@@ -361,6 +372,7 @@ export function VideoPlayer({
           setNeedsClick(true);
         });
     } else {
+      pauseResumePendingRef.current = true;
       video.pause();
     }
   };
@@ -574,6 +586,16 @@ export function VideoPlayer({
               startedRef.current = true;
               setHasEnded(false);
               setPlaying(true);
+              if (pauseResumePendingRef.current) {
+                pauseResumePendingRef.current = false;
+                setShowPauseBurst(true);
+                if (pauseBurstTimerRef.current !== null)
+                  clearTimeout(pauseBurstTimerRef.current);
+                pauseBurstTimerRef.current = setTimeout(
+                  () => setShowPauseBurst(false),
+                  650,
+                );
+              }
             }}
             onPause={() => {
               setPlaying(false);
@@ -738,7 +760,7 @@ export function VideoPlayer({
                 </button>
                 <button
                   type="button"
-                  className="button button--secondary"
+                  className="button button--secondary button--play-action"
                   onClick={() => chooseResume(false)}
                 >
                   Play from the beginning
@@ -764,7 +786,7 @@ export function VideoPlayer({
               <p>Starting in {nextEpisodeCountdown} seconds</p>
               <div className="video-player__next-episode-actions">
                 <button
-                  className="button button--primary"
+                  className="button button--primary button--play-action"
                   type="button"
                   disabled={episodeSwitching}
                   onClick={() => void playEpisode(nextEpisode)}
@@ -782,8 +804,11 @@ export function VideoPlayer({
             </section>
           </div>
         )}
-        {isPaused && (
-          <div className="video-player__paused-indicator" aria-hidden="true">
+        {(isPaused || showPauseBurst) && (
+          <div
+            className={`video-player__paused-indicator${showPauseBurst ? " is-resuming" : ""}`}
+            aria-hidden="true"
+          >
             <PauseIcon size="overlay" />
           </div>
         )}

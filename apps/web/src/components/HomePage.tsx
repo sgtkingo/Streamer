@@ -14,6 +14,7 @@ import { usePlaybackChecks } from "./usePlaybackChecks";
 interface HomePageProps {
   api: StreamerApi;
   profileId: string;
+  locale: string;
   playbackPreferences: PlaybackPreferences;
   version?: number;
   onLibraryChanged: () => void;
@@ -49,6 +50,7 @@ interface ConversationTurn {
 export function HomePage({
   api,
   profileId,
+  locale,
   playbackPreferences,
   version,
   onLibraryChanged,
@@ -59,6 +61,9 @@ export function HomePage({
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<DiscoveryUiResponse | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [isWakingAgent, setIsWakingAgent] = useState(false);
+  const [activeStage, setActiveStage] = useState(0);
+  const [isLaunching, setIsLaunching] = useState(false);
   const [isLoadingFeed, setIsLoadingFeed] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -68,7 +73,12 @@ export function HomePage({
   );
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const requestCounter = useRef(0);
+  const searchSerial = useRef(0);
+  const activeSearch = useRef<AbortController | null>(null);
+  const sessionIsClean = useRef(true);
+  const searchProgressRef = useRef<HTMLElement>(null);
   const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const scrollToNextResult = useRef(false);
   const playbackChecks = usePlaybackChecks(api, profileId);
 
   const loadHome = useCallback(async () => {
@@ -101,26 +111,130 @@ export function HomePage({
       `${count} validated ${count === 1 ? "title" : "titles"} ready.`,
     );
     resultsHeadingRef.current?.focus();
+    if (scrollToNextResult.current) {
+      scrollToNextResult.current = false;
+      resultsHeadingRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "start",
+      });
+    }
   }, [result]);
+
+  useEffect(() => {
+    if (!isSearching) return;
+    searchProgressRef.current?.scrollIntoView?.({
+      behavior: "smooth",
+      block: "center",
+    });
+    const interval = window.setInterval(() => {
+      setActiveStage((stage) => Math.min(stage + 1, isWakingAgent ? 1 : 3));
+    }, 650);
+    return () => window.clearInterval(interval);
+  }, [isSearching, isWakingAgent]);
+
+  useEffect(() => {
+    if (!isSearching || !isWakingAgent) return;
+    let pending = false;
+    const interval = window.setInterval(async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const status = await api.getInferenceResidency(
+          activeSearch.current?.signal,
+        );
+        if (
+          status.state === "loaded" &&
+          activeSearch.current?.signal.aborted === false
+        ) {
+          setIsWakingAgent(false);
+          setAnnouncement("The local agent is awake and finding your matches.");
+        }
+      } catch {
+        // Keep the wake-up notice until discovery ends if the probe is unavailable.
+      } finally {
+        pending = false;
+      }
+    }, 2_000);
+    return () => window.clearInterval(interval);
+  }, [api, isSearching, isWakingAgent]);
+
+  useEffect(
+    () => () => {
+      searchSerial.current += 1;
+      activeSearch.current?.abort();
+    },
+    [profileId],
+  );
+
+  const stopSearch = () => {
+    searchSerial.current += 1;
+    activeSearch.current?.abort();
+    activeSearch.current = null;
+    // The server may have completed the cancelled turn before the transport closed.
+    sessionIsClean.current = false;
+    setIsSearching(false);
+    setIsWakingAgent(false);
+    setIsLaunching(false);
+    setAnnouncement("Search stopped.");
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     const message = query.trim();
-    if (message.length < 2) return;
+    if (message.length < 2 || activeSearch.current) return;
+    const controller = new AbortController();
+    const serial = ++searchSerial.current;
+    const keepConversation = sessionIsClean.current;
+    activeSearch.current = controller;
     setIsSearching(true);
+    setIsWakingAgent(false);
+    setIsLaunching(true);
+    setActiveStage(0);
     setError("");
     setNotice("");
     setAnnouncement("StreamerAI is finding and validating titles.");
+    window.setTimeout(() => {
+      if (serial === searchSerial.current) setIsLaunching(false);
+    }, 600);
     try {
-      const response = await api.discover({
-        profileId,
-        message,
-        sessionId: result?.sessionId,
-        idempotencyKey: `${Date.now()}-${++requestCounter.current}`,
-      });
+      if (feed?.mode === "live") {
+        try {
+          const status = await api.getInferenceResidency(
+            controller.signal,
+            true,
+          );
+          if (serial !== searchSerial.current || controller.signal.aborted)
+            return;
+          if (status.state === "unloaded") {
+            setIsWakingAgent(true);
+            setActiveStage((stage) => Math.min(stage, 1));
+            setAnnouncement("");
+          }
+        } catch {
+          if (serial !== searchSerial.current || controller.signal.aborted)
+            return;
+          // A failed probe must not prevent discovery.
+        }
+      }
+      const response = await api.discover(
+        {
+          profileId,
+          message,
+          sessionId: keepConversation ? result?.sessionId : undefined,
+          idempotencyKey: `${Date.now()}-${++requestCounter.current}`,
+        },
+        controller.signal,
+      );
+      setIsWakingAgent(false);
+      setActiveStage(stageLabels.length - 1);
+      // Let the final validation cue register before revealing a fast response.
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
+      if (serial !== searchSerial.current || controller.signal.aborted) return;
+      sessionIsClean.current = true;
+      scrollToNextResult.current = true;
       setResult(response as DiscoveryUiResponse);
       setTurns((current) => [
-        ...current,
+        ...(keepConversation ? current : []),
         {
           id: `${response.sessionId}-user-${requestCounter.current}`,
           role: "user",
@@ -134,9 +248,17 @@ export function HomePage({
       ]);
       setQuery("");
     } catch (searchError) {
-      setError(safeErrorMessage(searchError));
+      if (serial === searchSerial.current && !controller.signal.aborted) {
+        sessionIsClean.current = false;
+        setError(safeErrorMessage(searchError));
+      }
     } finally {
-      setIsSearching(false);
+      if (serial === searchSerial.current) {
+        activeSearch.current = null;
+        setIsSearching(false);
+        setIsWakingAgent(false);
+        setIsLaunching(false);
+      }
     }
   };
 
@@ -186,6 +308,10 @@ export function HomePage({
       (item) => item.title.availability === "unavailable",
     ) ?? [];
   const unknownResults = result?.unverified ?? [];
+  const wakeMessage =
+    locale === "cs"
+      ? "Ouč, agent usnul. Musím ho vzbudit, počkej chvíli…"
+      : "Ouch, the local agent dozed off. Waking it up—hang tight…";
 
   return (
     <main id="home" className="home-page">
@@ -210,18 +336,26 @@ export function HomePage({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
+                if (!isSearching) event.currentTarget.form?.requestSubmit();
               }
             }}
             placeholder={"Try “an autumn movie with Sandra Bullock”"}
           />
           <button
-            className="composer-submit"
-            type="submit"
-            disabled={isSearching || query.trim().length < 2}
+            className={`composer-submit${isSearching ? " is-searching" : ""}${isLaunching ? " is-launching" : ""}`}
+            type={isSearching ? "button" : "submit"}
+            onClick={isSearching ? stopSearch : undefined}
+            disabled={!isSearching && query.trim().length < 2}
+            aria-label={isSearching ? "Stop search" : "Find something"}
           >
-            {isSearching ? "Working…" : "Find something"}{" "}
-            <span aria-hidden="true">→</span>
+            <span className="composer-submit__label" aria-hidden={isSearching}>
+              Find something{" "}
+              <span className="composer-submit__enter" aria-hidden="true">
+                ↵
+              </span>
+            </span>
+            <span className="composer-submit__stop" aria-hidden="true" />
+            <span className="composer-submit__gleam" aria-hidden="true" />
           </button>
         </form>
         <div className="prompt-examples" aria-label="Example searches">
@@ -242,17 +376,38 @@ export function HomePage({
       </section>
 
       {isSearching && (
-        <section
-          className="pipeline"
-          aria-live="polite"
-          aria-label="Discovery progress"
-        >
-          {stageLabels.map((label, index) => (
-            <span key={label} className={index === 0 ? "is-active" : ""}>
-              {label}
-            </span>
-          ))}
-        </section>
+        <>
+          <section
+            className="pipeline"
+            ref={searchProgressRef}
+            aria-live="polite"
+            aria-label="Discovery progress"
+          >
+            {stageLabels.map((label, index) => (
+              <span
+                key={label}
+                className={
+                  index === activeStage
+                    ? "is-active"
+                    : index < activeStage
+                      ? "is-done"
+                      : ""
+                }
+              >
+                <span className="pipeline__indicator" aria-hidden="true" />
+                {label}
+              </span>
+            ))}
+          </section>
+          {isWakingAgent && (
+            <p className="agent-wake-notice" role="status">
+              <span className="agent-wake-notice__spark" aria-hidden="true">
+                ✦
+              </span>
+              {wakeMessage}
+            </p>
+          )}
+        </>
       )}
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}

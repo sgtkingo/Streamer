@@ -35,6 +35,10 @@ function createApi(): StreamerApi {
       runtime: "Ollama",
       model: "qwen3.5:4b",
     }),
+    getInferenceResidency: vi.fn().mockResolvedValue({
+      state: "loaded",
+      checkedAt: "2026-09-27T12:00:00.000Z",
+    }),
     completeSetup: vi.fn().mockResolvedValue(undefined),
     getProfiles: vi.fn().mockResolvedValue({
       items: [
@@ -727,6 +731,142 @@ describe("conversational Home", () => {
       within(results).getByRole("button", { name: /add to library/i }),
     );
     expect(api.addToLibrary).toHaveBeenCalledWith("default", title.id);
+  });
+
+  it("shows a wake-up notice only when the live local model is not resident", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    vi.mocked(api.getHome).mockResolvedValue({
+      profileId: "default",
+      mode: "live",
+      generatedAt: "2026-09-27T12:00:00.000Z",
+      sections: [],
+    });
+    vi.mocked(api.getInferenceResidency).mockResolvedValue({
+      state: "unloaded",
+      checkedAt: "2026-09-27T12:00:00.000Z",
+    });
+    let resolveDiscovery:
+      | ((value: Awaited<ReturnType<StreamerApi["discover"]>>) => void)
+      | undefined;
+    vi.mocked(api.discover).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDiscovery = resolve;
+        }),
+    );
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await screen.findByRole("heading", {
+      name: /what are you in the mood for/i,
+    });
+    await waitFor(() => expect(api.getHome).toHaveBeenCalled());
+    await user.type(
+      screen.getByLabelText(/ask streamerai/i),
+      "an autumn movie",
+    );
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+
+    expect(
+      await screen.findByText(/local agent dozed off/i, {
+        selector: ".agent-wake-notice",
+      }),
+    ).toBeInTheDocument();
+    expect(api.getInferenceResidency).toHaveBeenCalledWith(
+      expect.any(AbortSignal),
+      true,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const progress = screen.getByRole("region", { name: "Discovery progress" });
+    expect(
+      within(progress).getByText("Ranking verified matches"),
+    ).not.toHaveClass("is-active");
+
+    resolveDiscovery?.({
+      sessionId: "cold-session",
+      mode: "live",
+      stage: "completed",
+      reply: "Found a match.",
+      bestMatch: null,
+      available: [],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+    expect(
+      await screen.findByRole("region", { name: /a considered shortlist/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/local agent dozed off/i, {
+        selector: ".agent-wake-notice",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("stops discovery and ignores a response that arrives after cancellation", async () => {
+    const user = userEvent.setup();
+    const api = createApi();
+    let resolveDiscovery:
+      | ((value: Awaited<ReturnType<StreamerApi["discover"]>>) => void)
+      | undefined;
+    vi.mocked(api.discover).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDiscovery = resolve;
+        }),
+    );
+    window.history.replaceState({}, "", "/");
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: /alex/i }));
+    await user.type(
+      screen.getByLabelText(/ask streamerai/i),
+      "a gentle comedy",
+    );
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+
+    const stop = screen.getByRole("button", { name: "Stop search" });
+    expect(stop).toHaveClass("is-searching");
+    expect(
+      screen.getByRole("region", { name: "Discovery progress" }),
+    ).toBeInTheDocument();
+    const signal = vi.mocked(api.discover).mock.calls[0]?.[1];
+    expect(signal?.aborted).toBe(false);
+    await user.click(stop);
+    expect(signal?.aborted).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Find something" }),
+    ).toBeEnabled();
+
+    resolveDiscovery?.({
+      sessionId: "late-session",
+      mode: "live",
+      stage: "completed",
+      reply: "This result should be discarded.",
+      bestMatch: { title, reason: "Late result" },
+      available: [],
+      unavailable: [],
+      unverified: [],
+      warnings: [],
+      completedAt: "2026-09-27T12:00:00.000Z",
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByText("This result should be discarded."),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("region", { name: "Discovery progress" }),
+      ).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Find something" }));
+    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
+    expect(
+      vi.mocked(api.discover).mock.calls[1]?.[0].sessionId,
+    ).toBeUndefined();
   });
 
   it("automatically checks a live title and enables Play when verified", async () => {

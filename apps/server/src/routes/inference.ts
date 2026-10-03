@@ -17,6 +17,56 @@ export function registerInferenceRoutes(
   app: FastifyInstance,
   dependencies: InferenceRouteDependencies,
 ): void {
+  app.get("/api/v1/inference/residency", async (request) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1_500);
+    let state: "loaded" | "unloaded" | "unknown" = "unknown";
+    try {
+      const response = await dependencies.fetch(
+        `${dependencies.config.baseUrl}/api/ps`,
+        {
+          method: "GET",
+          headers: { accept: "application/json" },
+          signal: controller.signal,
+        },
+      );
+      if (response.ok) {
+        const body: unknown = await response.json();
+        if (
+          typeof body === "object" &&
+          body !== null &&
+          "models" in body &&
+          Array.isArray(body.models)
+        ) {
+          state = body.models.some(
+            (model: unknown) =>
+              typeof model === "object" &&
+              model !== null &&
+              (("name" in model && model.name === dependencies.config.model) ||
+                ("model" in model &&
+                  model.model === dependencies.config.model)),
+          )
+            ? "loaded"
+            : "unloaded";
+        }
+      }
+    } catch {
+      // An unavailable runtime is not proof that the model is cold.
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (
+      state === "unloaded" &&
+      (request.query as { record?: string }).record === "true"
+    ) {
+      request.log.info(
+        { model: dependencies.config.model },
+        "Local agent is not resident; waiting for Ollama to load it",
+      );
+    }
+    return { state, checkedAt: dependencies.now().toISOString() };
+  });
+
   app.post("/api/v1/inference/detect", async () => {
     const result = await preflightOllama(dependencies);
     await dependencies.integrationStateStore.set({

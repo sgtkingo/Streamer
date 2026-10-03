@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createApp, type FetchLike } from "../src/index.js";
+import {
+  createApp,
+  type FetchLike,
+  type InferenceFetch,
+} from "../src/index.js";
 
 const unusedFetch: FetchLike = async () => {
   throw new Error("TMDB fetch should not run in a system-route test");
@@ -38,6 +42,43 @@ describe("system API", () => {
     expect(live.json()).toMatchObject({ status: "ok" });
     expect(ready.statusCode).toBe(200);
     expect(ready.json()).toMatchObject({ status: "ready" });
+  });
+
+  it("reports whether the configured local agent is loaded without exposing Ollama details", async () => {
+    let resident = false;
+    const inferenceFetch: InferenceFetch = async (url) => {
+      expect(url).toMatch(/\/api\/ps$/);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          models: [{ model: resident ? "qwen3.5:4b" : "another-model:latest" }],
+        }),
+      };
+    };
+    const instance = createApp({
+      environment: "test",
+      logger: false,
+      fetch: unusedFetch,
+      inferenceFetch,
+      now: () => new Date("2026-09-27T12:00:00.000Z"),
+    });
+    apps.push(instance);
+    const cold = await instance.inject({
+      method: "GET",
+      url: "/api/v1/inference/residency?record=true",
+    });
+    expect(cold.statusCode).toBe(200);
+    expect(cold.json()).toEqual({
+      state: "unloaded",
+      checkedAt: "2026-09-27T12:00:00.000Z",
+    });
+    resident = true;
+    const warm = await instance.inject({
+      method: "GET",
+      url: "/api/v1/inference/residency",
+    });
+    expect(warm.json()).toMatchObject({ state: "loaded" });
   });
 
   it("makes non-persistent development storage explicit", async () => {

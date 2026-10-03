@@ -105,7 +105,7 @@ export function AppShell({
     window.history.pushState({}, "", next === "home" ? "/" : `/${next}`);
     setRoute(next);
     setProfileMenuOpen(false);
-    window.scrollTo({ top: 0, behavior: "auto" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   return (
@@ -207,6 +207,7 @@ export function AppShell({
         <HomePage
           api={api}
           profileId={profileId}
+          locale={profile.locale}
           playbackPreferences={profile.playback}
           version={libraryVersion}
           onLibraryChanged={() => setLibraryVersion((value) => value + 1)}
